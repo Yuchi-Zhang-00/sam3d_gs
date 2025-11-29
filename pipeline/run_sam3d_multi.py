@@ -52,19 +52,19 @@ def main():
     parser.add_argument(
         "--image-path",
         type=str,
-        default="/data/yufei/sam3/assets/img.jpg",
+        default="sam3/assets/img.jpg",
         help="Input image path to lift to 3D.",
     )
     parser.add_argument(
         "--mask-root",
         type=str,
-        default="/data/yufei/sam3/agent_output_multi/masks",
+        default="sam3/agent_output_multi/masks",
         help="Directory containing mask PNG/JPGs.",
     )
     parser.add_argument(
         "--save-dir",
         type=str,
-        default="/data/yufei/sam-3d-objects/torch_save_pt",
+        default="sam-3d-objects/torch_save_pt",
         help="Where to save <parent>_<maskname>.pt files.",
     )
     parser.add_argument(

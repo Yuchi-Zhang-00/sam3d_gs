@@ -19,19 +19,19 @@ def main():
     parser.add_argument(
         "--project-root",
         type=str,
-        default="/data/yufei/sam-3d-objects",
+        default="sam-3d-objects",
         help="Root directory of sam-3d-objects project.",
     )
     parser.add_argument(
         "--save-dir",
         type=str,
-        default="/data/yufei/sam-3d-objects/torch_save_pt",
+        default="sam-3d-objects/torch_save_pt",
         help="Directory containing *.pt files.",
     )
     parser.add_argument(
         "--image-path",
         type=str,
-        default="/data/yufei/sam3/assets/img.jpg",
+        default="sam3/assets/img.jpg",
         help="Original image path (used only to derive IMAGE_NAME).",
     )
     parser.add_argument(

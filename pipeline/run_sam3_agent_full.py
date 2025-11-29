@@ -355,19 +355,19 @@ def main():
     parser.add_argument(
         "--image-path",
         type=str,
-        default="/data/yufei/sam3/assets/img.jpg",
+        default="sam3/assets/img.jpg",
         help="输入图片路径",
     )
     parser.add_argument(
         "--output-root",
         type=str,
-        default="/data/yufei/sam3/agent_output_multi",
+        default="sam3/agent_output_multi",
         help="SAM3 多物体输出根目录（内部会建 obj_1, obj_2, ...）",
     )
     parser.add_argument(
         "--system-prompt-path",
         type=str,
-        default="/data/yufei/sam3/examples/system_prompt_scene_prompts.txt",
+        default="sam3/examples/system_prompt_scene_prompts.txt",
         help="Qwen 用的 system prompt 文本路径",
     )
     parser.add_argument(
@@ -384,7 +384,7 @@ def main():
     parser.add_argument(
         "--llm-model-id",
         type=str,
-        default="/data/yufei/sam3/models",
+        default="sam3/models",
         help="发送给 LLM 服务的模型名称（需与 vLLM --served-model-name 一致）",
     )
 
