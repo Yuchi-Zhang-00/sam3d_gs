@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="README_zh.md">
+    <img src="https://img.shields.io/badge/语言-中文-red?style=for-the-badge">
+  </a>
+</p>
+
 # **Unified Multi-Stage 2D→3D Perception Pipeline**
 
 ## *vLLM × SAM3 × SAM-3D-Objects Integration*
@@ -204,6 +210,28 @@ Force fresh download:
 force_download=True
 ```
 
+## **Note on Coordinate System (PLY Output Orientation)**
+
+The 3D Gaussian `.ply` files exported by **SAM-3D-Objects** are expressed in the **camera coordinate system**, where:
+
+- **+Z axis** points **forward** from the camera
+- **+X axis** points right
+- **+Y axis** points downward (typical computer vision convention)
+
+This means the reconstructed objects are aligned using **camera-forward Z-axis** rather than a world coordinate frame.
+
+If you want to visualize or place the objects in a global **world coordinate system**, you must apply a **camera-to-world transformation**:
+$$
+\mathbf{X}_{world} = \mathbf{R}_{c2w}\ \mathbf{X}_{camera} \ + \ \mathbf{t}_{c2w}
+$$
+Where:
+
+- $\mathbf{R}_{c2w}$ is the rotation matrix from camera to world
+- $\mathbf{t}_{c2w}$ is the translation vector
+- $\mathbf{X}_{camera}$ is the Gaussian center in camera coordinates
+- $\mathbf{X}_{world}$ is the desired world coordinate position
+
+After applying this transformation, the `.ply` will correctly align with your global scene, robotics simulator, or NeRF / COLMAP world frame.
 ------
 
 # **Citation**

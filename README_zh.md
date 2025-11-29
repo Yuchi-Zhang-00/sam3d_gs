@@ -266,6 +266,28 @@ bash run_sam3d_from_masks.sh
 force_download=True
 ```
 
+## **关于坐标系说明（PLY 输出方向）**
+
+通过 **SAM-3D-Objects** 导出的 3D Gaussian `.ply` 文件默认处于 **相机坐标系** 下，其中：
+
+- **+Z 轴** 为相机前向
+- **+X 轴** 指向右侧
+- **+Y 轴** 指向下方（典型计算机视觉坐标系）
+
+因此，重建的对象是以 **相机前向 Z 轴** 对齐的，而不是世界坐标系。
+
+如果需要将 `.ply` 放置到全局 **世界坐标系** 中（例如仿真器、机器人场景、NeRF / COLMAP world frame），必须执行一次 **相机 → 世界坐标系转换**：
+$$
+\mathbf{X}_{world} = \mathbf{R}_{c2w}\ \mathbf{X}_{camera} \ + \ \mathbf{t}_{c2w}
+$$
+其中：
+
+- $\mathbf{R}_{c2w}$：相机到世界的旋转矩阵
+- $\mathbf{t}_{c2w}$：相机到世界的平移向量
+- $\mathbf{X}_{camera}$：高斯中心的相机系坐标
+- $\mathbf{X}_{world}$：转换后的世界系坐标
+
+完成转换后，你即可将 `.ply` 与全局场景或机器人环境正确对齐。
 ------
 
 # **引用（Citation）**
