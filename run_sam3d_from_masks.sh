@@ -29,7 +29,7 @@ export TORCH_HOME="${SCRIPT_DIR}/torch_hub"
 export TORCH_HUB="${SCRIPT_DIR}/torch_hub"
 
 # Conda init script (absolute)
-CONDA_SH="/data/yufei/miniconda3/etc/profile.d/conda.sh"
+CONDA_SH="/your_path/miniconda3/etc/profile.d/conda.sh"
 
 # Conda env for SAM3D
 SAM3D_ENV="sam3d-objects"

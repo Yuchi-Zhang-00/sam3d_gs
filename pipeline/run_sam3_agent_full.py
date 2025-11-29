@@ -38,20 +38,6 @@ from sam3.agent.client_sam3 import call_sam_service as call_sam_service_orig
 # 0. 环境变量（可按需精简）
 # =========================
 
-def setup_env():
-    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-    os.environ.setdefault("HF_HOME", "/data/yufei/huggingface")
-    os.environ.setdefault("TRANSFORMERS_CACHE", "/data/yufei/huggingface")
-    os.environ.setdefault("HF_DATASETS_CACHE", "/data/yufei/huggingface")
-    os.environ.setdefault("HF_HUB_CACHE", "/data/yufei/huggingface")
-
-    # TF32 & inference mode（只用于加速推理）
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-
-    # 如果你的卡不支持 bfloat16，可以改成 float16
-    torch.autocast("cuda", dtype=torch.bfloat16).__enter__()
-    torch.inference_mode().__enter__()
 
 
 # =========================
@@ -117,7 +103,7 @@ def generate_scene_prompts_with_qwen(
     send_generate_request,
     llm_config: dict,
     max_prompts: int = 12,
-    system_prompt_path: str = "/data/yufei/sam3/examples/system_prompt_scene_prompts.txt",
+    system_prompt_path: str = "examples/system_prompt_scene_prompts.txt",
 ):
     """
     1. 调 Qwen3-VL-8B-Thinking，看图生成可分割对象的英文短 prompt 列表。
@@ -404,8 +390,6 @@ def main():
 
     args = parser.parse_args()
 
-    # 如果需要，也可以在这里启用 setup_env()
-    # setup_env()
 
     # 构建 LLM & SAM3
     llm_config, llm_server_url = build_llm_config(

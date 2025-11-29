@@ -17,7 +17,7 @@ export HF_DATASETS_CACHE="${HF_HOME}"
 export HF_HUB_CACHE="${HF_HOME}"
 
 # Path to conda initialization script (usually absolute)
-CONDA_SH="/data/yufei/miniconda3/etc/profile.d/conda.sh"
+CONDA_SH="/your_path/miniconda3/etc/profile.d/conda.sh"
 
 # Conda env names
 VLLM_ENV="vllm"
@@ -105,7 +105,7 @@ fi
 ############################################
 echo ">>> Starting vLLM server on GPUs 6,7 ..."
 CUDA_VISIBLE_DEVICES=6,7 \
-vllm serve /data/yufei/sam3d_gs/models/qwen3_vl_8b_thinking \
+vllm serve "${VLLM_MODEL_DIR}" \
     --tensor-parallel-size 2 \
     --dtype float16 \
     --gpu-memory-utilization 0.9 \
