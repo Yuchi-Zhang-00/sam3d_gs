@@ -17,10 +17,10 @@ export HF_DATASETS_CACHE="${HF_HOME}"
 export HF_HUB_CACHE="${HF_HOME}"
 
 # Path to conda initialization script (usually absolute)
-CONDA_SH="/data/yufei/miniconda3/etc/profile.d/conda.sh"
+CONDA_SH="/your_path/miniconda3/etc/profile.d/conda.sh"
 
 # Conda env names
-VLLM_ENV="vllm_test"
+VLLM_ENV="vllm"
 SAM3_ENV="sam3"
 
 # vLLM model directory (where Qwen3-VL-8B-Thinking will be downloaded)
