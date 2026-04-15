@@ -12,7 +12,6 @@ from inference import (
     transform_mesh,
     ready_gaussian_for_video_rendering,
     render_video,
-    # render_front_view_gs,
     interactive_visualizer,
     _fix_gaussian_alignment
 )
@@ -99,7 +98,7 @@ def main():
 
     extrinsics = np.load(os.path.join(image_dir, 'extrinsic.npy'))
     intrinsics = np.load(os.path.join(image_dir, 'intrinsic.npy'))
-    depth_anysplat      = np.load(os.path.join(image_dir, 'depth_ori.npy')) if os.path.exists(os.path.join(image_dir, 'depth_ori.npy')) else np.load(os.path.join(image_dir, 'depth.npy'))
+    depth_anysplat      = np.load(os.path.join(image_dir, 'depth.npy'))
     scale_factor      = np.load(os.path.join(image_dir, 'scale.npy')) if os.path.exists(os.path.join(image_dir, 'scale.npy')) else None
 
     # 打印信息 (已修正标签错误)
@@ -125,8 +124,6 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    print_info = []
-
     for i, mask_path in enumerate(mask_paths):
         print(f"[{i+1}/{len(mask_paths)}] running inference on mask: {mask_path}")
 
@@ -137,13 +134,13 @@ def main():
         size_ori = np.sum(mask)
         original_sizes.append(size_ori)
         masks.append(mask)
-        # print(f"depth_anysplat shape: {depth_anysplat.shape}")
-        # print(f"depth_anysplat dtype: {depth_anysplat.dtype}")
+        print(f"depth_anysplat shape: {depth_anysplat.shape}")
+        print(f"depth_anysplat dtype: {depth_anysplat.dtype}")
         depth_fg = depth_anysplat[mask]
         mean_depth_ori = depth_fg.mean()
         min_depth_ori = depth_fg.min()
         max_depth_ori = depth_fg.max()
-        # print(f"anyplat mean_depth_ori: {mean_depth_ori:.4f}, min_depth_ori: {min_depth_ori:.4f}, max_depth_ori: {max_depth_ori:.4f}")
+        print(f"anyplat mean_depth_ori: {mean_depth_ori:.4f}, min_depth_ori: {min_depth_ori:.4f}, max_depth_ori: {max_depth_ori:.4f}")
         depth_normalized = ((depth_fg - depth_fg.min()) / (depth_fg.max() - depth_fg.min()) * 255).astype(np.uint8)
         # imageio.imwrite( './depth_visual_1.png', depth_normalized)
         # 构造保存名字：使用mask文件名（无扩展名）.pt
@@ -163,23 +160,16 @@ def main():
             torch.save(out, save_path)
             print(f"✅ Saved: {save_path}")
 
-        # # 输出out 的dict键
-        # print(f"  Output keys: {list(out.keys())}")
-
-        # 根据out的位姿将Gaussian转换到Sam3d估计的位姿
-
-
-        # out_copy = copy.deepcopy(out)
-        # gs_origin = out_copy["gs"]
         gs_origin = copy.deepcopy(out["gs"])
+        gs_origin.save_ply(os.path.join(assets_dir, f"{mask_stem}_gs_origin.ply"))
 
-        single_scene = make_scene(out)
-        # 改动x，z轴朝向与anysplat的结果对齐 （x右y下z前）
-        xyz = single_scene.get_xyz
-        xyz_cv = xyz.clone()
-        xyz_cv[:, 1] = -xyz[:, 1]  # Y轴翻转      
-        xyz_cv[:, 0] = -xyz[:, 0]  # X轴翻转
-        single_scene.from_xyz(xyz_cv)
+        # single_scene = make_scene(out)
+        # # 改动x，z轴朝向与anysplat的结果对齐 （x右y下z前）
+        # xyz = single_scene.get_xyz
+        # xyz_cv = xyz.clone()
+        # xyz_cv[:, 1] = -xyz[:, 1]  # Y轴翻转      
+        # xyz_cv[:, 0] = -xyz[:, 0]  # X轴翻转
+        # single_scene.from_xyz(xyz_cv)
 
         # stem = os.path.splitext(os.path.basename(p))[0]
         # single_ply_path = os.path.join(single_gauss_dir, f"{stem}.ply")
@@ -189,21 +179,26 @@ def main():
         
         # 输出未经transform的Gaussian
         untransforrmed_ply_path = os.path.join(assets_dir, f"{mask_stem}_gs_untransformed.ply")
-        out["gs"].save_ply(untransforrmed_ply_path)
-        print(f"🟢 Saved untransformed single-object PLY: {untransforrmed_ply_path}")
+        # out["gs"].save_ply(untransforrmed_ply_path)
+        # print(f"🟢 Saved untransformed single-object PLY: {untransforrmed_ply_path}")
         
         # 打印object的pose，scale
         rotation_output = out['rotation'].cpu().numpy()
         translation_output = out['translation'].cpu().numpy()
         scale_output = out['scale'].squeeze(0).cpu().numpy()
-        print(f"type scale_output: {type(scale_output)}, scale_output: {scale_output}")
+        scale_anysplat = scale_output[0]
+        print(f"anysplat scale of {mask_stem} : {scale_anysplat}")
+        print(f"total scale of {mask_stem} : {scale_anysplat*0.33980582524271846}")
+        # print(f"type scale_output: {type(scale_output)}, scale_output: {scale_output}")
         # print(f" rotation: {out['rotation']}")
         # print(f" translation: {out['translation']}")
         # print(f" scale: {out['scale']}")            
+
+        # setting_scale = 0.246/0.722
+        setting_scale = 1
         
         if out['glb']:              # 如果输出包含mesh
             mesh = out['glb']
-            # mesh_origin = out_copy['glb']
             untransformed_mesh_path = os.path.join(assets_dir, f"{mask_stem}_mesh_untransformed.obj")
             # mesh.export(untransformed_mesh_path)
             print(f"🟢 Saved untransformed object Mesh: {untransformed_mesh_path}")
@@ -215,123 +210,34 @@ def main():
                 [0, 1, 0, 0],
                 [0, 0, 0, 1]
             ]) 
-            first_transformed_mesh_path = os.path.join(assets_dir, f"{mask_stem}_mesh_cooridnates_aligned.obj")
+            first_transformed_mesh_path = os.path.join(assets_dir, f"{mask_stem}_mesh_origin.obj")
             mesh.apply_transform(rot_coordinate_transform)
-            mesh_origin = copy.deepcopy(mesh)
+            # mesh.apply_scale(scale_anysplat*setting_scale)
+            # mesh_origin = copy.deepcopy(mesh)
             mesh.export(first_transformed_mesh_path)
             print(f"🟢 Saved object mesh whose coordinate aligned with gaussian's: {first_transformed_mesh_path}")
 
-            
-            # 1. 处理旋转：四元数 → 旋转矩阵
-            quat = copy.deepcopy(rotation_output) # pytorch3d中四元数[w, x, y, z]
-            rot = R.from_quat(quat,scalar_first=True).as_matrix().squeeze(0) # 3x3
+            # bbox = mesh.bounds
+            # size = bbox[1] - bbox[0]
+            # dx, dy, dz = size
+            # print("X size:", dx)
+            # print("Y size:", dy)
+            # print("Z size:", dz)
+            # print("Longest edge:", max(dx, dy, dz))
 
-            inverse_rot = np.linalg.inv(rot)
-            # 2. 处理缩放
-            # scale = scale_output.copy()
-            if np.isscalar(scale_output):
-                scale = np.array([scale_output, scale_output, scale_output])
-            else:
-                scale = np.asarray(scale_output)
-            
-            # 构建缩放矩阵（3x3）
-            scale_mat = np.diag(scale)
+            # xyz = gs_origin.get_xyz
+            # xyz_cv = xyz.clone()
+            # xyz_cv = xyz_cv * (scale_anysplat*setting_scale)
+            # gs_origin.from_xyz(xyz_cv)
+            # adjust_scale = gs_origin.get_scaling * (scale_anysplat*setting_scale)
+            # gs_origin.mininum_kernel_size *= (scale_anysplat*setting_scale)
+            # gs_origin.from_scaling(adjust_scale)
+            # single_ply_path = os.path.join(assets_dir, f"{mask_stem}_gs_resize.ply")
+            # gs_origin.save_ply(single_ply_path)
+            # print(f"🟢 Saved transformed object PLY: {single_ply_path}")
 
-            # 4. 构建 4x4 齐次变换矩阵
-            transform = np.eye(4)
-            transform[:3, :3] = inverse_rot @ scale_mat
-            transform[:3, 3] = copy.deepcopy(translation_output)
-
-            # 5. 应用变换到 mesh
-            mesh.apply_transform(transform)
-            # x, y轴取反，朝向目标坐标系（x右，y下，z前）
-            mesh.vertices[:,1] = -mesh.vertices[:,1]
-            mesh.vertices[:,0] = -mesh.vertices[:,0]
-            # single_mesh_path = os.path.join(single_gauss_dir, f"{stem}-yz-inverse3.obj")
-            single_mesh_path = os.path.join(assets_dir, f"{mask_stem}_mesh_sam3d_taget.obj")
-            # mesh.export(single_mesh_path)
-            # print(f"🟢 Saved single-object Mesh: {single_mesh_path}")
-          
-            mesh_copy = copy.deepcopy(mesh)
-            print(f"verticies shape {mesh.vertices.shape} mesh_copy vertics {np.mean(mesh_copy.vertices,axis=0)}")
-            color, depth = mesh_rendering(mesh=mesh_copy,extrinsics=extrinsics,fov_y=fov_y/180*np.pi)
-            mean_depth_sam3d = np.mean(depth[depth > 0])
-            z_shift = mean_depth_ori - mean_depth_sam3d
-            print(f" z_shift:{ z_shift}, mean_depth_sam3d: {mean_depth_sam3d}, mean_depth_ori: {mean_depth_ori}")
-            mesh.vertices= mesh.vertices + np.array([0, 0, z_shift])
-            mesh_copy = mesh.copy()
-            print(f"verticies shape {mesh.vertices.shape} mesh_copy vertics {np.mean(mesh_copy.vertices,axis=0)}")
-            color, depth = mesh_rendering(mesh=mesh_copy,extrinsics=extrinsics,fov_y=fov_y/180*np.pi)
-            depth_fg = depth[depth > 0]
-            size_new = np.sum(depth > 0)
-            scale = size_ori/size_new
-            print(f"mask_stem: {mask_stem}", "size_ori:", size_ori, "size_new:", size_new, "scale:", scale, "scale type:", type(scale), "z_shift:", z_shift)
-            mesh.apply_scale(scale)
-            mesh_copy = copy.deepcopy(mesh)
-            color, depth = mesh_rendering(mesh=mesh_copy,extrinsics=extrinsics,fov_y=fov_y/180*np.pi)
-            mean_depth_sam3d_2 = np.mean(depth[depth > 0])
-            z_shift_2 = mean_depth_ori - mean_depth_sam3d_2
-            mesh.vertices= mesh.vertices + np.array([0, 0, z_shift_2])
-            transformed_mesh_path = os.path.join(assets_dir, f"{mask_stem}_mesh_final.obj")
-            mesh.export(transformed_mesh_path)
-
-            # === 新增：保存最后调整后的mesh平均坐标 ===
-            # 计算经过所有变换后的mesh顶点平均坐标
-            final_mesh_vertices = mesh.vertices / scale_factor
-            final_mesh_mean_xyz = np.mean(final_mesh_vertices, axis=0)
-            
-            # 保存到npy文件
-            mean_xyz_path = os.path.join(assets_dir, f"{mask_stem}_keyframe.npy")
-            np.save(mean_xyz_path, final_mesh_mean_xyz)
-            
-            print(f"Final mesh mean XYZ: [{final_mesh_mean_xyz[0]:.6f}, {final_mesh_mean_xyz[1]:.6f}, {final_mesh_mean_xyz[2]:.6f}]")
-            print(f"Saved final mesh mean XYZ to: {mean_xyz_path}")
-
-            if scale_factor is not None:
-                total_scale = float(scale * scale_output[0]) / scale_factor
-            else:
-                total_scale = float(scale * scale_output[0])
-            print(f" total_scale:{ total_scale},scale_output:{scale_output},scale:{scale}")
-            mesh_origin.apply_scale(total_scale)
-            # save mesh for mojoco
-            resized_mesh_path = os.path.join(assets_dir, f"{mask_stem}_resize.obj")
-            mesh_origin.export(resized_mesh_path)
-            print(f"🟢 Saved transformed object mesh: {transformed_mesh_path}")  
-            print(f"🟢 Saved resized object mesh: {resized_mesh_path}")         
-            # mesh已经根据z_shift和scale调整过了，现在将Gaussian进行同样的调整
-            xyz = single_scene.get_xyz
-            xyz_cv = xyz.clone()
-            xyz_cv[:, 2] = xyz[:, 2] + z_shift  # 在Z方向上第一次移动
-            xyz_cv = xyz_cv * scale
-            single_scene.from_xyz(xyz_cv)
-            adjust_scale = single_scene.get_scaling * scale
-            single_scene.mininum_kernel_size *= scale
-            single_scene.from_scaling(adjust_scale)
-            xyz = single_scene.get_xyz
-            xyz_cv = xyz.clone()
-            xyz_cv[:, 2] = xyz[:, 2] + z_shift_2  # 在Z方向上第二次移动   因为mesh移动了两次
-            single_scene.from_xyz(xyz_cv)
-            single_ply_path = os.path.join(assets_dir, f"{mask_stem}_gs_final.ply")
-            single_scene.save_ply(single_ply_path)
-            print(f"🟢 Saved transformed object PLY: {single_ply_path}")
-
-            xyz = gs_origin.get_xyz
-            xyz_cv = xyz.clone()
-            xyz_cv = xyz_cv * total_scale
-            gs_origin.from_xyz(xyz_cv)
-            adjust_scale = gs_origin.get_scaling * total_scale
-            gs_origin.mininum_kernel_size *= total_scale
-            gs_origin.from_scaling(adjust_scale)
-            xyz = gs_origin.get_xyz
-            # save 3dgs.ply for mujoco
-            origin_ply_path = os.path.join(assets_dir, f"{mask_stem}_resize.ply")
-            gs_origin.save_ply(origin_ply_path)
-            print(f"🟢 Saved resized object PLY: {origin_ply_path}")
-            print_info.append(f"total scale of {mask_stem}:{total_scale}")
-        
-        print(print_info)
-        # 如果显存很紧张，可以在这里 del single_scene / video 等    
-        del single_scene
+        # 如果显存很紧张，可以在这里 del single_scene / video 等
+        # del single_scene
 
         # 显式释放显存
         del out

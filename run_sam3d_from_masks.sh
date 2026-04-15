@@ -38,7 +38,7 @@ export TORCH_HUB="${SCRIPT_DIR}/torch_hub"
 # SAM3D_ENV="sam3d-objects"
 
 # sam-3d-objects repo root
-PROJECT_ROOT="${SCRIPT_DIR}/sam-3d-objects"
+PROJECT_ROOT="${SCRIPT_DIR}/Sam-3d-objects"
 
 # Where sam-3d-objects stores intermediate .pt
 PT_SAVE_DIR="${PROJECT_ROOT}/outputs/torch_save_pt"
@@ -50,11 +50,13 @@ PIPELINE_YAML="${CHECKPOINTS_DIR}/hf/pipeline.yaml"
 # Python entry scripts (放在 sam3d_gs/pipeline 下)
 SAM3D_MULTI_SCRIPT="${SCRIPT_DIR}/pipeline/run_sam3d_multi.py"
 RECONSTRUCT_SCRIPT="${SCRIPT_DIR}/pipeline/reconstruct_from_pt.py"
-FULL_PROCESS_SCRIPT="${SCRIPT_DIR}/pipeline/process.py"
+# FULL_PROCESS_SCRIPT="${SCRIPT_DIR}/pipeline/process.py"
+FULL_PROCESS_SCRIPT="${SCRIPT_DIR}/pipeline/process_batch_new.py"
 
 # Input image: 使用和 SAM3 agent 一样的图
 # IMAGE_PATH="${SCRIPT_DIR}/assets/img.jpg"
-IMAGE_PATH="${SCRIPT_DIR}/data/new-desk/new-desk.jpg"
+IMAGE_PATH="${SCRIPT_DIR}/doors/11/input_image.png"
+# IMAGE_PATH="${SCRIPT_DIR}/data/new-desk/input_image.jpg"
 
 # 🔴 关键：mask-root = SAM3 agent 的 mask 输出目录
 # 如果你的 run_sam3_agent_full.py 把 mask 写在：
@@ -86,9 +88,9 @@ EXPORT_GIF=1   # 1 = reconstruct 时加 --export-gif，0 = 不导出 GIF
 mkdir -p "${PT_SAVE_DIR}"
 
 # Initialize uv env
-# source "${SCRIPT_DIR}/../sam-3d-objects/.venv/bin/activate"
-source "${SCRIPT_DIR}/sam-3d-objects/.venv/bin/activate"
-
+# source "${SCRIPT_DIR}/sam-3d-objects/.venv/bin/activate"
+source "${SCRIPT_DIR}/.venv/bin/activate"
+echo "python 路径$(which python)"
 ############################################
 # 2.5. Ensure checkpoints/${TAG}/pipeline.yaml
 ############################################

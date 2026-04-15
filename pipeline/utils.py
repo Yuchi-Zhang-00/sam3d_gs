@@ -5,7 +5,7 @@ from PIL import Image
 import trimesh
 import pyrender
 import numpy as np
-
+import imageio
 def clean_name(x: str):
     return re.sub(r'[^0-9a-zA-Z_-]', '', x)
 
@@ -58,7 +58,16 @@ def mesh_rendering(mesh, extrinsics, fov_y):
     # mesh = trimesh.load(mesh_path)
     # 沿z轴移动
     # mesh.vertices= mesh.vertices + np.array([0, 0, z_shift])
-    mesh = pyrender.Mesh.from_trimesh(mesh)
+    print(f"verticies shape {mesh.vertices.shape} mesh vertics {np.mean(mesh.vertices,axis=0)}")
+    material = pyrender.MetallicRoughnessMaterial(
+    baseColorFactor=[0.7, 0.7, 0.7, 1.0],  # 灰色
+    metallicFactor=0.0,
+    roughnessFactor=1.0,
+        )
+
+    mesh = pyrender.Mesh.from_trimesh(mesh, material=material, smooth=False)
+
+    # mesh = pyrender.Mesh.from_trimesh(mesh)
     scene = pyrender.Scene()
     scene.add(mesh)
     # 相机内参
@@ -80,7 +89,8 @@ def mesh_rendering(mesh, extrinsics, fov_y):
     ])
 
     # pyrender 需要的是 camera → world
-    camera_pose = np.linalg.inv(T_wc) @ cv_to_gl
+    camera_pose = T_wc @ cv_to_gl
+    # camera_pose = np.linalg.inv(T_wc) @ cv_to_gl
     # camera_pose = np.linalg.inv(extrinsics)
     # camera_pose = extrinsics
     # camera_pose = np.eye(4)
@@ -95,6 +105,8 @@ def mesh_rendering(mesh, extrinsics, fov_y):
 
     renderer = pyrender.OffscreenRenderer(448, 448)
     color, depth = renderer.render(scene)
+    depth_normalized = ((depth - depth.min()) / (depth.max() - depth.min()) * 255).astype(np.uint8)
+    imageio.imwrite( './depth_visual.png', depth_normalized)
     print(f'max depth, {depth.max()}, min depth, {depth.min()}, mean depth, {depth.mean()}, sum depth, {depth[depth>0].mean()}'   )
     renderer.delete()
     return color, depth
