@@ -114,17 +114,34 @@ uv pip install -e './submodule/Sam-3d-objects[inference]' \
     --find-links "${KAOLIN_FIND_LINKS}"
 
 echo "==> Installing project-level runtime dependencies..."
+# Do NOT use -U here: that would let uv upgrade transitive deps (notably
+# torch, via iopaint) and clobber the CUDA-pinned torch installed above.
 uv pip install --index-strategy unsafe-best-match \
-    "transformers>=4.48.3" \
+    "transformers==4.48.3" \
     "iopaint>=1.2.0" \
+    "diffusers>=0.27.2" \
     "numpy<2.0" \
     "opencv-python>=4.8.0" \
     "pyyaml>=6.0" \
     "requests>=2.31.0" \
     "tqdm>=4.66.0" \
     "setuptools" \
-    "huggingface_hub" \
     "einops"
+
+# Pin huggingface_hub to 0.25.2 as the very last step: diffusers 0.27.2 (and
+# the iopaint stack on top of it) still imports `cached_download` from
+# huggingface_hub, which was removed in hub >= 0.26. Upstream Sam-3d-objects /
+# iopaint extras may pull in a newer hub transitively, so we force-reinstall
+# last (with --no-deps so it can downgrade without uv complaining) and lock
+# the exact version that was empirically verified to work.
+#
+# Note: transformers above is pinned to ==4.48.3 (not >=) because transformers
+# 5.x imports `is_offline_mode` from huggingface_hub, which doesn't exist in
+# 0.25.2 — using a floor here lets pip resolve to 5.x and breaks iopaint at
+# runtime even though hub stays pinned.
+echo "==> Pinning huggingface_hub==0.25.2 (force-reinstall, no-deps)..."
+uv pip install --index-strategy unsafe-best-match --force-reinstall --no-deps \
+    "huggingface_hub==0.25.2"
 
 echo "==> Installing SAM3..."
 uv pip install --index-strategy unsafe-best-match \

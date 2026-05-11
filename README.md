@@ -44,7 +44,7 @@ The three components are wired together through scripts under `pipeline/` and a 
 
 # **2. Setup**
 
-The project runs inside a single `uv`-managed virtual environment (`.venv/`). The instructions below cover an Ada / 50-series GPU build (CUDA 12.8, PyTorch 2.7).
+The project runs inside a single `uv`-managed virtual environment (`.venv/`). The setup below targets RTX 50-series GPUs (CUDA 12.8, PyTorch 2.7) and is also verified to work on 3090 / 4090.
 
 > **Hardware**: an NVIDIA GPU with **≥ 24 GB VRAM** is recommended. The pipeline loads SAM3, AnySplat, and SAM-3D-Objects sequentially and the SAM-3D-Objects stage in particular is memory-hungry.
 
@@ -287,6 +287,30 @@ You can also force a fresh download by setting `force_download=True` when invoki
 **Q: AnySplat reports “cannot find cuda-compiled version of RoPE2D, using a slow pytorch version instead”.**
 
 The CUDA extension was not built. Apply the `kernels.cu` patch documented in [`install.md`](install.md) and run `python setup.py build_ext --inplace`.
+
+**Q: `ImportError: cannot import name 'cached_download' from 'huggingface_hub'` during Stage 1 (Prompt-Inpaint / iopaint).**
+
+`huggingface_hub` ≥ 0.26 removed `cached_download`, but `diffusers` 0.27.x (which is what `iopaint` pulls in) still imports it. Downgrade `huggingface_hub` to 0.25.2:
+
+```bash
+source .venv/bin/activate
+uv pip install --index-strategy unsafe-best-match --force-reinstall --no-deps \
+    "huggingface_hub==0.25.2"
+```
+
+Fresh installs via `scripts/install_env.sh` already include this pin.
+
+**Q: `ImportError: cannot import name 'is_offline_mode' from 'huggingface_hub'` during Stage 1.**
+
+Same symptom from the other direction: `transformers` 5.x imports `is_offline_mode` from `huggingface_hub`, which doesn't exist in 0.25.2. Pin transformers to 4.48.3:
+
+```bash
+source .venv/bin/activate
+uv pip install --index-strategy unsafe-best-match --force-reinstall --no-deps \
+    "transformers==4.48.3"
+```
+
+Fresh installs via `scripts/install_env.sh` already include this pin.
 
 ------
 

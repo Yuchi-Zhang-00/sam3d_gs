@@ -44,7 +44,7 @@
 
 # **2. 环境安装**
 
-整个项目运行在单个由 `uv` 管理的虚拟环境 `.venv/` 中。下面的步骤面向 Ada / 50 系 GPU（CUDA 12.8，PyTorch 2.7）。
+整个项目运行在单个由 `uv` 管理的虚拟环境 `.venv/` 中。下面的步骤面向 RTX 50 系 GPU（CUDA 12.8，PyTorch 2.7），同样在 3090 / 4090 上验证通过。
 
 > **硬件**：推荐使用 **显存 ≥ 24 GB** 的 NVIDIA GPU。流水线会依次加载 SAM3、AnySplat、SAM-3D-Objects，其中 SAM-3D-Objects 阶段对显存最敏感。
 
@@ -284,6 +284,30 @@ bash run_object_generation_pipeline.sh path/to/input_image.png
 **Q：AnySplat 提示 "cannot find cuda-compiled version of RoPE2D, using a slow pytorch version instead"。**
 
 CUDA 扩展没编译。请按 [`install.md`](install.md) 里的说明修改 `kernels.cu`，再执行 `python setup.py build_ext --inplace`。
+
+**Q：Stage 1 (Prompt-Inpaint / iopaint) 报 `ImportError: cannot import name 'cached_download' from 'huggingface_hub'`。**
+
+`huggingface_hub` ≥ 0.26 把 `cached_download` 删掉了，但 `iopaint` 依赖的 `diffusers` 0.27.x 还在 import 它。把 `huggingface_hub` 锁到 0.25.2：
+
+```bash
+source .venv/bin/activate
+uv pip install --index-strategy unsafe-best-match --force-reinstall --no-deps \
+    "huggingface_hub==0.25.2"
+```
+
+新走 `scripts/install_env.sh` 的环境已经带上这个 pin。
+
+**Q：Stage 1 报 `ImportError: cannot import name 'is_offline_mode' from 'huggingface_hub'`。**
+
+同一根问题的另一侧：`transformers` 5.x 会 import `huggingface_hub.is_offline_mode`，而 0.25.2 没有这个符号。把 transformers 锁到 4.48.3：
+
+```bash
+source .venv/bin/activate
+uv pip install --index-strategy unsafe-best-match --force-reinstall --no-deps \
+    "transformers==4.48.3"
+```
+
+新走 `scripts/install_env.sh` 的环境已经带上这个 pin。
 
 ------
 

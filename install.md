@@ -36,17 +36,29 @@ uv pip install -e './submodule/Sam-3d-objects[p3d]' --no-build-isolation
 
 uv pip install -e "./submodule/Sam-3d-objects[inference]"     --no-build-isolation     --find-links https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.7.0_cu128.html
 
+# Note: do NOT pass -U here. With -U, uv would upgrade transitive deps such
+# as torch (via iopaint) and clobber the CUDA-pinned torch above.
+# Also note transformers is pinned to ==4.48.3 (not >=): transformers 5.x
+# imports `is_offline_mode` from huggingface_hub, which doesn't exist in
+# 0.25.2, and would crash iopaint even with hub pinned below.
 uv pip install --index-strategy unsafe-best-match \
-    "transformers>=4.48.3" \
+    "transformers==4.48.3" \
     "iopaint>=1.2.0" \
+    "diffusers>=0.27.2" \
     "numpy<2.0" \
     "opencv-python>=4.8.0" \
     "pyyaml>=6.0" \
     "requests>=2.31.0" \
     "tqdm>=4.66.0" \
     "setuptools" \
-    "huggingface_hub" \
     "einops"
+
+# Pin huggingface_hub last, with --force-reinstall --no-deps so it can be
+# downgraded past other packages' transitive `>=0.26` constraints.
+# Reason: diffusers 0.27.2 (and the iopaint stack on top) still import
+# `cached_download` from huggingface_hub, which was removed in hub >=0.26.
+uv pip install --index-strategy unsafe-best-match --force-reinstall --no-deps \
+    "huggingface_hub==0.25.2"
 
 uv pip install --index-strategy unsafe-best-match "git+https://github.com/facebookresearch/sam3.git"
 ```
