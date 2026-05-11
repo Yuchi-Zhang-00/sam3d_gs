@@ -13,7 +13,7 @@ KAOLIN_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.7.0_
 
 INSTALL_TORCH=1
 UPDATE_SUBMODULES=1
-COMPILE_CUROPE=0
+COMPILE_CUROPE=1
 
 usage() {
     cat <<'EOF'
@@ -23,13 +23,15 @@ Options:
   --python VERSION        Python version for uv venv. Default: 3.11
   --skip-torch           Do not install torch/torchvision/torchaudio.
   --skip-submodules      Do not run git submodule update --init --recursive.
-  --compile-curope       Patch and compile AnySplat curope CUDA extension.
+  --skip-curope          Do NOT patch+compile AnySplat curope CUDA extension
+                         (compiled by default; without it AnySplat falls back
+                         to a slower PyTorch RoPE2D implementation).
   -h, --help             Show this help.
 
 Examples:
   bash scripts/install_env.sh
   bash scripts/install_env.sh --skip-torch
-  bash scripts/install_env.sh --compile-curope
+  bash scripts/install_env.sh --skip-curope
 EOF
 }
 
@@ -47,8 +49,8 @@ while [[ $# -gt 0 ]]; do
             UPDATE_SUBMODULES=0
             shift
             ;;
-        --compile-curope)
-            COMPILE_CUROPE=1
+        --skip-curope)
+            COMPILE_CUROPE=0
             shift
             ;;
         -h|--help)
