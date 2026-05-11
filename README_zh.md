@@ -309,7 +309,7 @@ CUDA 扩展没编译。请按 [`install.md`](install.md) 里的说明修改 `ker
   title  = {SAM-3D-Objects: Segment Anything in 3D Using 2D Masks},
   author = {Wu, Yu and Mao, Weiyao and Kirillov, Alexander and others},
   year   = {2024},
-  url    = {https://github.com/facebookresearch/sam3d}
+  url    = {https://github.com/facebookresearch/sam-3d-objects}
 }
 
 @article{jiang2024anysplat,

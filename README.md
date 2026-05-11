@@ -312,7 +312,7 @@ The CUDA extension was not built. Apply the `kernels.cu` patch documented in [`i
   title  = {SAM-3D-Objects: Segment Anything in 3D Using 2D Masks},
   author = {Wu, Yu and Mao, Weiyao and Kirillov, Alexander and others},
   year   = {2024},
-  url    = {https://github.com/facebookresearch/sam3d}
+  url    = {https://github.com/facebookresearch/sam-3d-objects}
 }
 
 @article{jiang2024anysplat,
