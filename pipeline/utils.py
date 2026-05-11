@@ -1,11 +1,146 @@
 import re
 import os
+import atexit
 os.environ["PYOPENGL_PLATFORM"] = "egl"
 from PIL import Image
 import trimesh
 import pyrender
 import numpy as np
 import imageio
+
+
+_DEFAULT_MESH_RENDERERS = {}
+
+
+class MeshRenderContext:
+    def __init__(
+        self,
+        width=448,
+        height=448,
+        add_axis=False,
+        debug_depth_path=None,
+        verbose=False,
+    ):
+        self.width = width
+        self.height = height
+        self.add_axis = add_axis
+        self.debug_depth_path = debug_depth_path
+        self.verbose = verbose
+        self.renderer = pyrender.OffscreenRenderer(width, height)
+        self.material = pyrender.MetallicRoughnessMaterial(
+            baseColorFactor=[0.7, 0.7, 0.7, 1.0],
+            metallicFactor=0.0,
+            roughnessFactor=1.0,
+        )
+        self.cv_to_gl = np.array(
+            [
+                [1, 0, 0, 0],
+                [0, -1, 0, 0],
+                [0, 0, -1, 0],
+                [0, 0, 0, 1],
+            ],
+            dtype=np.float32,
+        )
+
+    def close(self):
+        if self.renderer is not None:
+            self.renderer.delete()
+            self.renderer = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
+    def render(self, mesh, extrinsics, fov_y):
+        if self.renderer is None:
+            self.renderer = pyrender.OffscreenRenderer(self.width, self.height)
+
+        if self.verbose:
+            print(
+                f"vertices shape {mesh.vertices.shape} "
+                f"mesh vertices mean {np.mean(mesh.vertices, axis=0)}"
+            )
+
+        render_mesh = pyrender.Mesh.from_trimesh(
+            mesh,
+            material=self.material,
+            smooth=False,
+        )
+
+        scene = pyrender.Scene()
+        scene.add(render_mesh)
+
+        camera = pyrender.PerspectiveCamera(
+            yfov=fov_y,
+            aspectRatio=self.width / self.height,
+        )
+
+        camera_pose = extrinsics @ self.cv_to_gl
+        scene.add(camera, pose=camera_pose)
+
+        if self.add_axis:
+            axis = trimesh.creation.axis(axis_length=0.5)
+            scene.add(pyrender.Mesh.from_trimesh(axis, smooth=False))
+
+        light = pyrender.DirectionalLight(color=np.ones(3), intensity=3.0)
+        scene.add(light, pose=camera_pose)
+
+        color, depth = self.renderer.render(scene)
+
+        if self.debug_depth_path:
+            depth_min = depth.min()
+            depth_range = depth.max() - depth_min
+            if depth_range > 0:
+                depth_normalized = (
+                    (depth - depth_min) / depth_range * 255
+                ).astype(np.uint8)
+            else:
+                depth_normalized = np.zeros_like(depth, dtype=np.uint8)
+            imageio.imwrite(self.debug_depth_path, depth_normalized)
+
+        if self.verbose:
+            valid_depth = depth[depth > 0]
+            valid_mean = valid_depth.mean() if valid_depth.size > 0 else np.nan
+            print(
+                f"max depth {depth.max()}, min depth {depth.min()}, "
+                f"mean depth {depth.mean()}, valid mean depth {valid_mean}"
+            )
+
+        return color, depth
+
+
+def get_default_mesh_renderer(
+    width=448,
+    height=448,
+    add_axis=False,
+    debug_depth_path=None,
+    verbose=False,
+):
+    key = (width, height, add_axis, debug_depth_path, verbose)
+    renderer = _DEFAULT_MESH_RENDERERS.get(key)
+    if renderer is None:
+        renderer = MeshRenderContext(
+            width=width,
+            height=height,
+            add_axis=add_axis,
+            debug_depth_path=debug_depth_path,
+            verbose=verbose,
+        )
+        _DEFAULT_MESH_RENDERERS[key] = renderer
+    return renderer
+
+
+def close_default_mesh_renderers():
+    for renderer in _DEFAULT_MESH_RENDERERS.values():
+        renderer.close()
+    _DEFAULT_MESH_RENDERERS.clear()
+
+
+atexit.register(close_default_mesh_renderers)
+
+
 def clean_name(x: str):
     return re.sub(r'[^0-9a-zA-Z_-]', '', x)
 
@@ -16,9 +151,7 @@ def load_image(path: str) -> Image.Image:
 
 
 def collect_mask_paths(mask_root: str):
-    """
-    递归收集 mask_root 下所有 png/jpg/jpeg 的路径。
-    """
+    """Recursively collect all .png / .jpg / .jpeg paths under mask_root."""
     all_mask_paths = []
     for root, _, files in os.walk(mask_root):
         for f in files:
@@ -31,18 +164,8 @@ def collect_mask_paths(mask_root: str):
     return all_mask_paths
 
 
-def load_binary_mask(path: str):
-    """
-    单个 mask 文件 → 二值 uint8 数组 (H, W), {0, 1}
-    """
-    m = np.array(Image.open(path).convert("L"))
-    m = (m > 128).astype("uint8")
-    return m
-
 def compute_fov_from_intrinsics(fx, fy, image_size, degrees=True):
-    """
-    从像素单位的 fx, fy 计算水平 / 垂直 FOV
-    """
+    """Compute horizontal / vertical FOV from pixel-unit fx, fy."""
     height, width = image_size
 
     fov_y = 2 * np.arctan(height / (2 * fy))
@@ -54,87 +177,24 @@ def compute_fov_from_intrinsics(fx, fy, image_size, degrees=True):
 
     return fov_x, fov_y
 
-def mesh_rendering(mesh, extrinsics, fov_y):
-    # mesh = trimesh.load(mesh_path)
-    # 沿z轴移动
-    # mesh.vertices= mesh.vertices + np.array([0, 0, z_shift])
-    print(f"verticies shape {mesh.vertices.shape} mesh vertics {np.mean(mesh.vertices,axis=0)}")
-    material = pyrender.MetallicRoughnessMaterial(
-    baseColorFactor=[0.7, 0.7, 0.7, 1.0],  # 灰色
-    metallicFactor=0.0,
-    roughnessFactor=1.0,
+def mesh_rendering(
+    mesh,
+    extrinsics,
+    fov_y,
+    renderer=None,
+    width=448,
+    height=448,
+    add_axis=False,
+    debug_depth_path=None,
+    verbose=False,
+):
+    if renderer is None:
+        renderer = get_default_mesh_renderer(
+            width=width,
+            height=height,
+            add_axis=add_axis,
+            debug_depth_path=debug_depth_path,
+            verbose=verbose,
         )
+    return renderer.render(mesh, extrinsics, fov_y)
 
-    mesh = pyrender.Mesh.from_trimesh(mesh, material=material, smooth=False)
-
-    # mesh = pyrender.Mesh.from_trimesh(mesh)
-    scene = pyrender.Scene()
-    scene.add(mesh)
-    # 相机内参
-    camera = pyrender.PerspectiveCamera(
-        yfov=fov_y,
-        aspectRatio=1.0
-    )
-
-    # 相机位姿（camera-to-world）
-    # extrinsics：OpenCV world → camera
-    T_wc = extrinsics
-
-    # OpenCV camera → OpenGL camera
-    cv_to_gl = np.array([
-        [ 1,  0,  0,  0],
-        [ 0, -1,  0,  0],
-        [ 0,  0, -1,  0],
-        [ 0,  0,  0,  1],
-    ])
-
-    # pyrender 需要的是 camera → world
-    camera_pose = T_wc @ cv_to_gl
-    # camera_pose = np.linalg.inv(T_wc) @ cv_to_gl
-    # camera_pose = np.linalg.inv(extrinsics)
-    # camera_pose = extrinsics
-    # camera_pose = np.eye(4)
-    # print('camera pose', camera_pose)
-    scene.add(camera, pose=camera_pose)
-    axis = trimesh.creation.axis(axis_length=0.5)
-    scene.add(pyrender.Mesh.from_trimesh(axis,smooth=False))
-
-    # 光源（很重要，否则是黑的）
-    light = pyrender.DirectionalLight(color=np.ones(3), intensity=3.0)
-    scene.add(light, pose=camera_pose)
-
-    renderer = pyrender.OffscreenRenderer(448, 448)
-    color, depth = renderer.render(scene)
-    depth_normalized = ((depth - depth.min()) / (depth.max() - depth.min()) * 255).astype(np.uint8)
-    imageio.imwrite( './depth_visual.png', depth_normalized)
-    print(f'max depth, {depth.max()}, min depth, {depth.min()}, mean depth, {depth.mean()}, sum depth, {depth[depth>0].mean()}'   )
-    renderer.delete()
-    return color, depth
-
-def mesh_rendering_with_depth_adjustment(mesh, extrinsics, fov_y, original_mean_depth, original_size):
-    # print(mesh_path)
-    mesh_copy = mesh.copy()
-    color, depth = mesh_rendering(mesh=mesh,extrinsics=extrinsics,fov_y=fov_y/180*np.pi)
-    mean_depth_sam3d = np.mean(depth[depth > 0])
-    print(f'mean depth sam3d, {mean_depth_sam3d}')
-    z_shift = original_mean_depth-mean_depth_sam3d
-    # 把 sam-3d结果放到跟anysplat背景相似的深度
-    color, depth = mesh_rendering(mesh=mesh_copy,extrinsics=extrinsics,fov_y=fov_y/180*np.pi)
-    
-    valid = depth > 0
-    depth_fg = depth[valid]
-    mean_depth = depth_fg.mean()
-    min_depth = depth_fg.min()
-    max_depth = depth_fg.max()
-    print(f"mean depth: {mean_depth:.4f}")
-    print(f"min depth:  {min_depth:.4f}")
-    print(f"max depth:  {max_depth:.4f}")
-    size_sam3d = np.sum(valid)
-    scale = original_size/size_sam3d
-    print(f'size sam3d = {size_sam3d}')
-    print(f'size anysplat = {original_size}')
-    print(f'scale = {scale}')
-    # 如果需要打印统计信息
-    print("Mean depth (excluding zeros):", np.mean(depth[~mask]))
-    print("Mean depth (all valid pixels):", np.mean(depth[depth > 0]))
-    return color, depth, scale

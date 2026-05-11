@@ -4,257 +4,322 @@
   </a>
 </p>
 
-# **Unified Multi-Stage 2D→3D Perception Pipeline**
+# **Unified 2D Single-Image → 3D Object Generation Pipeline**
 
-## *vLLM × SAM3 × SAM-3D-Objects Integration*
+## *Prompt-Inpaint × AnySplat × SAM-3D-Objects Integration*
+
+> This repo was originally forked from [xyys2003/sam3d_gs](https://github.com/xyys2003/sam3d_gs).
 
 ------
 
 ## **Abstract**
 
-This repository presents a unified and modular pipeline that couples large-scale vision–language reasoning, high-fidelity 2D segmentation, and multi-object 3D Gaussian splatting. It integrates three independent systems—**vLLM** (for Qwen3-VL inference), **SAM3** (for multi-object 2D segmentation), and **SAM-3D-Objects** (for 3D reconstruction from RGB + masks)—into a complete, end-to-end workflow. To ensure reproducibility, each module runs inside its own Conda environment. The pipeline supports both staged execution and a fully automated one-click execution, with built-in HuggingFace authentication, checkpoint management, and environment initialization.
+This repository packages a single-image 2D → 3D object reconstruction pipeline by composing three open-source systems behind one entry script:
+
+- **Prompt-Inpaint** — text-prompted multi-object segmentation (built on SAM3) plus background inpainting, producing per-object masks and a clean background image.
+- **AnySplat** — feed-forward 3D Gaussian Splatting from a single image, plus a RANSAC-based table-alignment pass that brings the scene into a Mujoco-friendly world frame.
+- **SAM-3D-Objects** — per-object mesh and Gaussian reconstruction from RGB + mask.
+
+The three components are wired together through scripts under `pipeline/` and a single uv-managed virtual environment, so the whole pipeline runs from one shell command.
 
 ------
 
-# **1. Repository Setup**
+# **1. Repository Layout**
 
 ```
-git clone --recursive https://github.com/xyys2003/sam3d_gs.git
+.
+├── run_object_generation_pipeline.sh   # one-shot entry: image → 3D assets
+├── pipeline/
+│   ├── background_reconstruction.py       # AnySplat + table RANSAC alignment
+│   ├── objects_generation.py           # SAM-3D-Objects multi-object reconstruction
+│   ├── mesh2mjcf.py                       # optional: convert per-object .obj → MuJoCo MJCF
+│   └── utils.py                           # shared rendering / IO helpers
+└── submodule/
+    ├── Prompt-Inpaint/                    # SAM3 segmentation + inpainting
+    ├── AnySplat/                          # single-image 3DGS reconstruction
+    └── Sam-3d-objects/                    # per-object mesh / GS reconstruction
+```
+
+------
+
+# **2. Setup**
+
+The project runs inside a single `uv`-managed virtual environment (`.venv/`). The instructions below cover an Ada / 50-series GPU build (CUDA 12.8, PyTorch 2.7).
+
+> **Hardware**: an NVIDIA GPU with **≥ 24 GB VRAM** is recommended. The pipeline loads SAM3, AnySplat, and SAM-3D-Objects sequentially and the SAM-3D-Objects stage in particular is memory-hungry.
+
+## **2.1 Clone with submodules**
+
+```bash
+git clone --recursive https://github.com/Yuchi-Zhang-00/sam3d_gs.git
 cd sam3d_gs
 ```
 
-If cloned without submodules:
+If the submodules were not initialized at clone time:
 
-```
+```bash
 git submodule update --init --recursive
 ```
 
-------
+## **2.2 Install the Python environment**
 
-# **2. Conda Environments**
+The recommended path is the bundled one-command installer:
 
-| Environment     | Purpose                                  | Path              |
-| --------------- | ---------------------------------------- | ----------------- |
-| `vllm`          | Serve Qwen3-VL-8B-Thinking via vLLM      | —                 |
-| `sam3`          | Multi-object segmentation (SAM3)         | `sam3/`           |
-| `sam3d-objects` | RGB + masks → 3D Gaussian reconstruction | `sam-3d-objects/` |
-
-------
-
-# **3. vLLM Environment (Qwen3-VL Server)**
-
-```
-conda create -n vllm python=3.10 -y
-conda activate vllm
+```bash
+bash scripts/install_env.sh
 ```
 
-Install PyTorch (CUDA 12.x):
+It creates `.venv`, installs PyTorch for CUDA 12.8, the submodule dependencies, and the project-level runtime dependencies.
 
-```
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
-    --index-url https://download.pytorch.org/whl/cu124
-```
+If you would rather run each step yourself, see [`install.md`](install.md). It also documents the small SAM-3D-Objects requirements-file patches and the AnySplat `kernels.cu` fix used to build the CUDA RoPE2D kernel.
 
-Install vLLM:
+## **2.3 HuggingFace access**
 
-```
-pip install vllm --extra-index-url https://download.pytorch.org/whl/cu124
-pip install transformers tiktoken sentencepiece xformers flashinfer-python
-pip install huggingface_hub
-```
+The pipeline pulls three models from HuggingFace:
 
-------
+| Model | Used by | Access |
+| --- | --- | --- |
+| [`facebook/sam3`](https://huggingface.co/facebook/sam3) | Prompt-Inpaint (Stage 1) | **Gated** — request access on the model page |
+| [`facebook/sam-3d-objects`](https://huggingface.co/facebook/sam-3d-objects) | SAM-3D-Objects (Stage 3) | **Gated** — request access on the model page |
+| [`lhjiang/anysplat`](https://huggingface.co/lhjiang/anysplat) | AnySplat (Stage 2) | Public (MIT) |
 
-# **4. SAM3 Environment**
+After accepting the agreements on the two gated pages, log in once:
 
-Reference implementation:
- 🔗 https://github.com/facebookresearch/sam3
- 🔗 https://huggingface.co/facebook/sam3
-
-```
-cd sam3
-conda create -n sam3 python=3.10 -y
-conda activate sam3
-```
-
-Install SAM3:
-
-```
-git clone https://github.com/facebookresearch/sam3.git
-cd sam3
-pip install -e .
-```
-
-Optional:
-
-```
-pip install -e ".[notebooks]"
-pip install -e ".[train,dev]"
-```
-
-------
-
-# **5. SAM-3D-Objects Environment**
-
-Reference implementation:
- 🔗 https://github.com/facebookresearch/sam3d
- 🔗 https://huggingface.co/facebook/sam-3d-objects
-
-```
-conda create -n sam_3d_body python=3.10 -y
-conda activate sam_3d_body
-```
-
-Install dependencies (excerpt):
-
-```
-pip install pytorch-lightning pyrender opencv-python yacs scikit-image einops timm dill pandas hydra-core ...
-```
-
-Install Detectron2:
-
-```
-pip install 'git+https://github.com/facebookresearch/detectron2.git@a1ce2f9' \
-    --no-build-isolation --no-deps
-```
-
-Optional: MoGe
-
-```
-pip install git+https://github.com/microsoft/MoGe.git
-```
-
-------
-
-# **6. Required HuggingFace Access**
-
-The pipeline requires access to the following models:
-
-- **SAM3**
-   🔗 https://huggingface.co/facebook/sam3
-- **SAM-3D-Objects**
-   🔗 https://huggingface.co/facebook/sam-3d-objects
-
-Log in after requesting access:
-
-```
+```bash
 hf auth login
 ```
 
-------
+The two gated models need explicit local placement and are fetched by a
+single bootstrap script (run once, after `hf auth login`):
 
-# **7. Running the Pipeline**
-
-Ensure the Conda activation path is correct:
-
-```
-CONDA_SH="/your_path/miniconda3/etc/profile.d/conda.sh"
+```bash
+bash scripts/download_checkpoints.sh
 ```
 
-------
+| Model | Target |
+| --- | --- |
+| `facebook/sam-3d-objects` | `submodule/Sam-3d-objects/checkpoints/hf/` (Hydra config tree, not fetched by `from_pretrained`) |
+| `facebook/sam3` | `submodule/Prompt-Inpaint/checkpoints/sam3.pt` (~3.3 GB; placed locally so it isn't lost when `~/.cache` is cleaned) |
 
-## **Stage 1 — Qwen3-VL + SAM3 (2D Mask Generation)**
+The script is idempotent and is also invoked automatically by
+`run_object_generation_pipeline.sh` on first run. Use `--skip-sam3d`,
+`--skip-sam3`, or `--force` to control individual stages.
 
-```
-bash run_agent_with_vllm.sh
-```
-
-Outputs:
-
-```
-outputs/master_with_vllm/masks/
-```
+`lhjiang/anysplat` is public and is downloaded lazily by
+`AnySplat.from_pretrained` the first time Stage 2 runs — no login or
+bootstrap step is needed for it.
 
 ------
 
-## **Stage 2 — SAM-3D-Objects Reconstruction**
+# **3. Quick Start**
+
+With the environment activated, try the bundled demo image:
+
+```bash
+bash run_object_generation_pipeline.sh example/example.png
+```
+
+By default, all outputs are written next to the input image (in this case, into `example/`). Pass an explicit output directory as the second argument if you want them elsewhere:
+
+```bash
+bash run_object_generation_pipeline.sh example/example.png path/to/scene_dir
+```
+
+The script runs three stages in sequence inside the single `.venv`:
+
+1. `submodule/Prompt-Inpaint/main.py` — segmentation + inpainting
+2. `pipeline/background_reconstruction.py` — AnySplat reconstruction + table alignment
+3. `pipeline/objects_generation.py` — per-object mesh + Gaussian export
+
+------
+
+# **4. Pipeline Stages**
+
+## **Stage 1 — Prompt-Inpaint (SAM3 segmentation + inpainting)**
+
+```bash
+python submodule/Prompt-Inpaint/main.py \
+    --resize-output \
+    --save-individual-masks \
+    --config submodule/Prompt-Inpaint/configs/items.yml \
+    --image path/to/input_image.png \
+    --output-dir path/to/scene_dir
+```
+
+Outputs (under `scene_dir/`):
+
+- `input_image.png` — resized copy of the input
+- `clean_background.png` — inpainted background with all foreground objects removed
+- `bg_mask.png` — table / desktop mask used for plane fitting
+- `masks/<object_name>.png` — per-object binary masks
+
+## **Stage 2 — AnySplat + table-aligned 3D Gaussians**
+
+```bash
+python pipeline/background_reconstruction.py path/to/scene_dir
+```
+
+Behaviour:
+
+- Loads `clean_background.png` (and the matching `input_image.png`) inside each scene folder under the input directory.
+- Runs AnySplat to recover camera intrinsics/extrinsics, depth, and a 3DGS reconstruction.
+- Fits a RANSAC plane to `bg_mask.png`, derives an OBB via inner PCA, and builds a world-to-table transform.
+- Re-emits the splat in a Mujoco-friendly frame.
+
+Useful flags:
+
+- `--model-id lhjiang/anysplat` — override the AnySplat HuggingFace model id
+- `--align-table` / `--no-align-table` — toggle RANSAC table alignment + the `bg_aligned.ply` export (default: enabled). When disabled, only the raw `bg.ply` is written
+- `--x-offset`, `--z-offset` — optional placement offsets (m) applied after alignment. Default: 0, so the aligned cloud sits at the origin
+
+Outputs (under `scene_dir/`):
+
+- `extrinsic.npy`, `intrinsic.npy` — camera parameters (world-to-camera; pixel-unit intrinsics)
+- `depth.npy`, `depth_visual.png` — depth from the splat reconstruction
+- `depth_ori.npy`, `depth_ori_visual.png` — depth from the original (non-inpainted) image
+- `scale.npy` — scene-level scale factor
+- `3d_assets/bg.ply` — raw 3DGS scene from AnySplat
+- `3d_assets/bg_aligned.ply` — table-aligned 3DGS scene (only when `--align-table` is on, which is the default)
+
+## **Stage 3 — SAM-3D-Objects per-object reconstruction**
+
+```bash
+python pipeline/objects_generation.py --input-dir path/to/scene_dir
+```
+
+Useful flags:
+
+- `--project-root submodule/Sam-3d-objects` — checkpoint root
+- `--tag hf` — checkpoint subdirectory (`submodule/Sam-3d-objects/checkpoints/<tag>/pipeline.yaml`)
+- `--seed 42`, `--save-pt`, `--save-intermediate`
+
+For each mask, the stage runs SAM-3D-Objects inference, recovers the object's local scale by matching projected area + mean depth against the AnySplat depth map, and exports the asset at the origin.
+
+Outputs (under `scene_dir/3d_assets/`):
+
+- `<object>.obj` — per-object mesh sized for Mujoco
+- `<object>.ply` — per-object 3D Gaussians sized for Mujoco
+- `<object>_keyframe.npy` — mean XYZ of the final mesh
+- (with `--save-intermediate`) debug renderings and the pose-applied versions
+
+------
+
+# **5. Optional Tools**
+
+## **`pipeline/mesh2mjcf.py` — mesh → MuJoCo MJCF converter**
+
+A standalone CLI that turns a single `.obj` or `.stl` mesh into MuJoCo MJCF
+assets (a `<asset>_dependencies.xml` + `<asset>.xml` pair, plus a per-asset
+mesh / texture directory). It is **not** wired into
+`run_object_generation_pipeline.sh`; use it on demand once Stage 3 has
+produced `<scene>/3d_assets/<obj>.obj`.
+
+By default, the output root is the parent directory of the input mesh, so
+running it on `scene_dir/3d_assets/cup.obj` writes a self-contained per-asset
+folder right next to the input:
 
 ```
-bash run_sam3d_from_masks.sh
+scene_dir/3d_assets/
+  cup.obj                      (original input, untouched)
+  cup/                         (per-asset output folder, named after the obj stem)
+    cup.obj                    (copy of the input)
+    cup.mtl                    (if multi-material)
+    <texture files>            (referenced by the MTL)
+    part_0.obj part_1.obj ...  (if -cd)
+    mjcf/
+      cup.xml
+      cup_dependencies.xml
 ```
 
-Outputs:
+Mesh paths inside the emitted XMLs are written as `<asset>/<file>`, so the
+consuming MuJoCo scene should set `meshdir` (and `texturedir`) to the output
+root. Pass `-o/--output <dir>` to redirect.
 
-```
-sam-3d-objects/outputs/torch_save_pt/
-sam-3d-objects/gaussians/multi/
+### Required libraries
+
+The converter has no extra dependencies beyond the Python standard library
+unless you opt into the following features:
+
+| Feature | Library | Install |
+| --- | --- | --- |
+| Multi-material OBJ splitting (automatic when an MTL file is present) | `trimesh` | usually already installed via the Sam-3d-objects extras; `uv pip install trimesh` otherwise |
+| Convex decomposition (`-cd`) | `coacd`, `trimesh` | `uv pip install coacd trimesh` |
+| Preview viewer (`--verbose`) | `mujoco` | `uv pip install mujoco` |
+
+### Usage
+
+```bash
+# Basic conversion (default colour / mass / inertia)
+python pipeline/mesh2mjcf.py path/to/cup.obj
+
+# Custom RGBA, mass, and diagonal inertia
+python pipeline/mesh2mjcf.py path/to/cup.obj \
+    --rgba 0.8 0.2 0.2 1.0 --mass 0.5 --diaginertia 0.01 0.01 0.005
+
+# Free-floating body + convex decomposition for accurate collisions
+python pipeline/mesh2mjcf.py path/to/cup.obj --free_joint -cd
+
+# Preview in mujoco.viewer after conversion
+python pipeline/mesh2mjcf.py path/to/cup.obj --verbose
+
+# Batch over all per-object meshes in one scene
+for obj in scene_dir/3d_assets/*.obj; do
+    python pipeline/mesh2mjcf.py "$obj" -cd
+done
 ```
 
 ------
 
-## **Optional: One-Click Execution**
+# **6. Coordinate System Notes**
 
-```
-bash run_pipeline.sh
-```
+- **AnySplat** returns camera-to-world extrinsics; the pipeline inverts them and stores world-to-camera (`extrinsic.npy`).
+- The raw 3D Gaussian `.ply` files produced by SAM-3D-Objects are expressed in a camera-aligned frame (+Z forward, +X right, +Y down). Stage 3 applies the rotation `_SAM3D_TO_WORLD` (see `pipeline/objects_generation.py`) to map them into the world frame.
+- The final `bg_aligned.ply` is centred on the table, scaled so the 95% quantile of |xyz| maps to 0.6, and optionally shifted by `--x-offset` / `--z-offset` (default 0, so it lands at the origin).
 
 ------
 
-# **8. Q&A**
+# **7. FAQ**
 
-## **Q1: Download error “Consistency check failed: file should be XXXX but has size YYYY”?**
+**Q: HuggingFace download fails with “Consistency check failed: file should be XXXX but has size YYYY”.**
 
-Cause: corrupted model shards in the HuggingFace cache due to unstable network.
+Corrupt shards in the HuggingFace cache. Clear and retry:
 
-Fix:
-
-```
-rm -rf sam-3d-objects/checkpoints/hf
-rm -rf ~/.cache/huggingface/hub   # optional
-bash run_sam3d_from_masks.sh
+```bash
+rm -rf submodule/Sam-3d-objects/checkpoints/hf
+rm -rf ~/.cache/huggingface/hub   # optional, more aggressive
+bash run_object_generation_pipeline.sh path/to/input_image.png
 ```
 
-Force fresh download:
+You can also force a fresh download by setting `force_download=True` when invoking the HuggingFace API.
 
-```
-force_download=True
-```
+**Q: AnySplat reports “cannot find cuda-compiled version of RoPE2D, using a slow pytorch version instead”.**
 
-## **Note on Coordinate System (PLY Output Orientation)**
+The CUDA extension was not built. Apply the `kernels.cu` patch documented in [`install.md`](install.md) and run `python setup.py build_ext --inplace`.
 
-The 3D Gaussian `.ply` files exported by **SAM-3D-Objects** are expressed in the **camera coordinate system**, where:
-
-- **+Z axis** points **forward** from the camera
-- **+X axis** points right
-- **+Y axis** points downward (typical computer vision convention)
-
-This means the reconstructed objects are aligned using **camera-forward Z-axis** rather than a world coordinate frame.
-
-If you want to visualize or place the objects in a global **world coordinate system**, you must apply a **camera-to-world transformation**:
-$$
-\mathbf{X}_{world} = \mathbf{R}_{c2w}\ \mathbf{X}_{camera} \ + \ \mathbf{t}_{c2w}
-$$
-Where:
-
-- $\mathbf{R}_{c2w}$ is the rotation matrix from camera to world
-- $\mathbf{t}_{c2w}$ is the translation vector
-- $\mathbf{X}_{camera}$ is the Gaussian center in camera coordinates
-- $\mathbf{X}_{world}$ is the desired world coordinate position
-
-After applying this transformation, the `.ply` will correctly align with your global scene, robotics simulator, or NeRF / COLMAP world frame.
 ------
 
-# **Citation**
+# **Citations**
 
-### SAM3
-
-```
+```bibtex
 @article{kirillov2024sam3,
-  title={SAM 3: Segment Anything in Images and Videos},
-  author={Kirillov, Alexander and Ravi, Nikhila and Mao, Weiyao and others},
-  year={2024},
-  url={https://github.com/facebookresearch/sam3}
+  title  = {SAM 3: Segment Anything in Images and Videos},
+  author = {Kirillov, Alexander and Ravi, Nikhila and Mao, Weiyao and others},
+  year   = {2024},
+  url    = {https://github.com/facebookresearch/sam3}
 }
-```
 
-### SAM-3D-Objects
-
-```
 @article{wu2024sam3dobjects,
-  title={SAM-3D-Objects: Segment Anything in 3D Using 2D Masks},
-  author={Wu, Yu and Mao, Weiyao and Kirillov, Alexander and others},
-  year={2024},
-  url={https://github.com/facebookresearch/sam3d}
+  title  = {SAM-3D-Objects: Segment Anything in 3D Using 2D Masks},
+  author = {Wu, Yu and Mao, Weiyao and Kirillov, Alexander and others},
+  year   = {2024},
+  url    = {https://github.com/facebookresearch/sam3d}
+}
+
+@article{jiang2024anysplat,
+  title  = {AnySplat: Feed-forward 3D Gaussian Splatting from Unconstrained Views},
+  author = {Jiang, Lihan and others},
+  year   = {2024},
+  url    = {https://github.com/OpenRobotLab/AnySplat}
 }
 ```
 
@@ -264,11 +329,9 @@ After applying this transformation, the `.ply` will correctly align with your gl
 
 This project is built upon and integrates:
 
-- **SAM3**
-   GitHub: https://github.com/facebookresearch/sam3
-   HuggingFace: https://huggingface.co/facebook/sam3
-- **SAM-3D-Objects**
-   GitHub: https://github.com/facebookresearch/sam3d
-   HuggingFace: https://huggingface.co/facebook/sam-3d-objects
+- **SAM3** — [GitHub](https://github.com/facebookresearch/sam3) · [HuggingFace](https://huggingface.co/facebook/sam3)
+- **SAM-3D-Objects** — [GitHub](https://github.com/facebookresearch/sam3d) · [HuggingFace](https://huggingface.co/facebook/sam-3d-objects)
+- **AnySplat** — [HuggingFace](https://huggingface.co/lhjiang/anysplat)
+- **Prompt-Inpaint** — [GitHub](https://github.com/MrZoyo/Prompt-Inpaint)
 
-We sincerely thank the authors for making their research and implementations publicly available.
+We thank the authors for making their research and implementations publicly available.

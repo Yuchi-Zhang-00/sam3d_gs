@@ -4,327 +4,331 @@
   </a>
 </p>
 
-# **统一的多阶段 2D→3D 感知流水线**
+# **2D 单图 → 3D 物体生成流水线**
 
-## *vLLM × SAM3 × SAM-3D-Objects 集成*
+## *Prompt-Inpaint × AnySplat × SAM-3D-Objects 集成*
+
+> 本仓库最初 fork 自 [xyys2003/sam3d_gs](https://github.com/xyys2003/sam3d_gs)。
 
 ------
 
 ## **摘要**
 
-本仓库构建了一个完整的 2D → 3D 感知流水线，将 **大模型视觉理解、2D 多物体分割、3D Gaussian Splatting 重建** 三者进行统一整合。流水线由：
+本仓库将三个开源系统串联进单条流水线，使用一条命令即可完成单图 → 多物体 3D 资产的生成：
 
-- **vLLM**：提供 Qwen3-VL-8B-Thinking 视觉语言大模型推理
-- **SAM3**：执行高质量多物体 2D 分割
-- **SAM-3D-Objects**：将 RGB + mask 提升为 3D 高斯点（Gaussian Splat）
+- **Prompt-Inpaint**：基于 SAM3 的文本提示多物体分割 + 背景补全，产出有每个物体的 mask 与 clean background。
+- **AnySplat**：单图前馈式 3D Gaussian Splatting 重建；额外的 RANSAC 桌面对齐将场景对齐到坐标系原点。
+- **SAM-3D-Objects**：以 RGB + mask 为输入，重建单物体的 mesh 与 Gaussian。
 
-为确保可复现性，每个模块均独立运行在各自的 Conda 环境中。系统支持 **分阶段执行**（先 2D 分割、再 3D 重建），也支持 **一键式全流程运行**。
+三者通过 `pipeline/` 下的脚本以及一个由 `uv` 管理的单一虚拟环境串联起来，整条流水线由一个 shell 命令驱动。
 
 ------
 
-# **1. 仓库克隆**
+# **1. 仓库结构**
 
 ```
-git clone --recursive https://github.com/xyys2003/sam3d_gs.git
+.
+├── run_object_generation_pipeline.sh   # 主入口：单图 → 3D 资产
+├── pipeline/
+│   ├── background_reconstruction.py       # AnySplat + 桌面 RANSAC 对齐
+│   ├── objects_generation.py           # SAM-3D-Objects 多物体重建
+│   ├── mesh2mjcf.py                       # 可选：把单物体 .obj 转成 MuJoCo MJCF
+│   └── utils.py                           # 渲染 / IO 公共工具
+└── submodule/
+    ├── Prompt-Inpaint/                    # SAM3 分割 + 背景补全
+    ├── AnySplat/                          # 单图 3DGS 重建
+    └── Sam-3d-objects/                    # 单物体 mesh / GS 重建
+```
+
+------
+
+# **2. 环境安装**
+
+整个项目运行在单个由 `uv` 管理的虚拟环境 `.venv/` 中。下面的步骤面向 Ada / 50 系 GPU（CUDA 12.8，PyTorch 2.7）。
+
+> **硬件**：推荐使用 **显存 ≥ 24 GB** 的 NVIDIA GPU。流水线会依次加载 SAM3、AnySplat、SAM-3D-Objects，其中 SAM-3D-Objects 阶段对显存最敏感。
+
+## **2.1 克隆仓库（含子模块）**
+
+```bash
+git clone --recursive https://github.com/Yuchi-Zhang-00/sam3d_gs.git
 cd sam3d_gs
 ```
 
-如果你忘记使用 `--recursive` 克隆，可运行：
+如果克隆时忘了 `--recursive`：
 
-```
+```bash
 git submodule update --init --recursive
 ```
 
-------
+## **2.2 安装 Python 环境**
 
-# **2. Conda 环境说明**
+推荐使用一键安装脚本：
 
-本项目使用三个互相隔离的 Conda 环境，以避免依赖冲突。
-
-| 环境名称        | 功能用途                           | 路径              |
-| --------------- | ---------------------------------- | ----------------- |
-| `vllm`          | 运行 Qwen3-VL-8B-Thinking 推理服务 | —                 |
-| `sam3`          | 运行 SAM3 完成 2D 多物体分割       | `sam3/`           |
-| `sam3d-objects` | 从 RGB + Mask 生成 3D Gaussian     | `sam-3d-objects/` |
-
-------
-
-# **3. vLLM 环境（Qwen3-VL 服务器）**
-
-### **3.1 创建环境**
-
-```
-conda create -n vllm python=3.10 -y
-conda activate vllm
+```bash
+bash scripts/install_env.sh
 ```
 
-### **3.2 安装 PyTorch（CUDA 12.x）**
+脚本会创建 `.venv`、安装 CUDA 12.8 版 PyTorch、子模块依赖以及项目级运行时依赖。
 
-```
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
-    --index-url https://download.pytorch.org/whl/cu124
-```
+如果想手动一步步执行，请查阅 [`install.md`](install.md)。该文档同时记录了 SAM-3D-Objects 的几处 requirements 文件 patch 和编译 AnySplat CUDA RoPE2D 内核所需的 `kernels.cu` 修改。
 
-### **3.3 安装 vLLM 与相关依赖**
+## **2.3 HuggingFace 权限申请**
 
-```
-pip install vllm --extra-index-url https://download.pytorch.org/whl/cu124
-pip install transformers tiktoken sentencepiece xformers flashinfer-python
-pip install huggingface_hub
-```
+流水线依赖以下三个 HuggingFace 模型：
 
-此配置已验证可稳定运行 **Qwen3-VL-8B-Thinking**。
+| 模型 | 使用方 | 访问 |
+| --- | --- | --- |
+| [`facebook/sam3`](https://huggingface.co/facebook/sam3) | Prompt-Inpaint（Stage 1） | **gated**，需在模型页面申请权限 |
+| [`facebook/sam-3d-objects`](https://huggingface.co/facebook/sam-3d-objects) | SAM-3D-Objects（Stage 3） | **gated**，需在模型页面申请权限 |
+| [`lhjiang/anysplat`](https://huggingface.co/lhjiang/anysplat) | AnySplat（Stage 2） | 公开（MIT） |
 
-------
+在两个 gated 模型页面接受协议后，登录一次：
 
-# **4. SAM3 环境**
-
-官方实现：
- 🔗 https://github.com/facebookresearch/sam3
- 🔗 https://huggingface.co/facebook/sam3
-
-### **4.1 创建环境**
-
-```
-cd sam3
-conda create -n sam3 python=3.10 -y
-conda activate sam3
-```
-
-### **4.2 安装 PyTorch（CUDA 12.x）**
-
-```
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
-    --index-url https://download.pytorch.org/whl/cu124
-```
-
-### **4.3 克隆并安装 SAM3**
-
-```
-git clone https://github.com/facebookresearch/sam3.git
-cd sam3
-pip install -e .
-```
-
-### **4.4 可选依赖（用于 Notebook 或训练）**
-
-```
-pip install -e ".[notebooks]"
-pip install -e ".[train,dev]"
-```
-
-------
-
-# **5. SAM-3D-Objects 环境**
-
-官方实现：
- 🔗 https://github.com/facebookresearch/sam3d
- 🔗 https://huggingface.co/facebook/sam-3d-objects
-
-### **5.1 创建环境**
-
-```
-conda create -n sam_3d_body python=3.10 -y
-conda activate sam_3d_body
-```
-
-### **5.2 安装 PyTorch（CUDA 12.x）**
-
-```
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
-    --index-url https://download.pytorch.org/whl/cu124
-```
-
-### **5.3 安装其他 Python 依赖**
-
-```
-pip install pytorch-lightning pyrender opencv-python yacs scikit-image einops timm dill pandas rich \
-    hydra-core hydra-submitit-launcher hydra-colorlog pyrootutils webdataset chump networkx==3.2.1 \
-    roma joblib seaborn wandb appdirs appnope ffmpeg cython jsonlines pytest xtcocotools loguru \
-    optree fvcore black pycocotools tensorboard huggingface_hub
-```
-
-### **5.4 安装 Detectron2（SAM3D 依赖）**
-
-```
-pip install 'git+https://github.com/facebookresearch/detectron2.git@a1ce2f9' \
-    --no-build-isolation --no-deps
-```
-
-### **5.5 可选安装：MoGe**
-
-```
-pip install git+https://github.com/microsoft/MoGe.git
-```
-
-------
-
-# **6. HuggingFace 权限申请**
-
-本项目依赖两个需要授权的模型：
-
-- **SAM3**
-   🔗 https://huggingface.co/facebook/sam3
-- **SAM-3D-Objects**
-   🔗 https://huggingface.co/facebook/sam-3d-objects
-
-请在 HuggingFace 对应页面申请权限，并登录：
-
-```
+```bash
 hf auth login
 ```
 
-脚本会自动使用你的 Token。
+两个 gated 模型需要显式放置到本地，由一个 bootstrap 脚本一次性处理（登录后
+跑一次即可）：
+
+```bash
+bash scripts/download_checkpoints.sh
+```
+
+| 模型 | 落地位置 |
+| --- | --- |
+| `facebook/sam-3d-objects` | `submodule/Sam-3d-objects/checkpoints/hf/`（Hydra 配置树，不会被 `from_pretrained` 拉取） |
+| `facebook/sam3` | `submodule/Prompt-Inpaint/checkpoints/sam3.pt`（约 3.3 GB；放到本地以免 `~/.cache` 清理后丢失） |
+
+该脚本是幂等的，且 `run_object_generation_pipeline.sh` 在首次运行时也会
+自动调用它。可以通过 `--skip-sam3d`、`--skip-sam3` 或 `--force` 单独控制每
+一个 stage。
+
+`lhjiang/anysplat` 是公开模型，在 Stage 2 首次运行时由
+`AnySplat.from_pretrained` 按需下载，**不需要登录或 bootstrap**。
 
 ------
 
-# **7. 运行流程**
+# **3. 快速开始**
 
-运行脚本前，请设置你的 Conda 激活脚本路径：
+激活环境后，可以先用仓库自带的示例图跑一遍：
+
+```bash
+bash run_object_generation_pipeline.sh example/example.png
+```
+
+默认所有产物会写到输入图像所在目录（此例中即 `example/`）。若想显式指定输出目录，可以传第二个参数：
+
+```bash
+bash run_object_generation_pipeline.sh example/example.png path/to/scene_dir
+```
+
+脚本会在同一个 `.venv` 中按顺序执行三个 stage：
+
+1. `submodule/Prompt-Inpaint/main.py` — 分割 + 背景补全
+2. `pipeline/background_reconstruction.py` — AnySplat 重建 + 桌面对齐
+3. `pipeline/objects_generation.py` — 单物体 mesh / Gaussian 导出
+
+------
+
+# **4. 各 Stage 详解**
+
+## **Stage 1 — Prompt-Inpaint（SAM3 分割 + 背景补全）**
+
+```bash
+python submodule/Prompt-Inpaint/main.py \
+    --resize-output \
+    --save-individual-masks \
+    --config submodule/Prompt-Inpaint/configs/items.yml \
+    --image path/to/input_image.png \
+    --output-dir path/to/scene_dir
+```
+
+输出（位于 `scene_dir/`）：
+
+- `input_image.png` — 输入图像的 resize 副本
+- `clean_background.png` — 去除所有前景物体后的补全背景
+- `bg_mask.png` — 用于平面拟合的桌面 mask
+- `masks/<物体名>.png` — 每个物体的二值 mask
+
+## **Stage 2 — AnySplat + 桌面对齐 3DGS**
+
+```bash
+python pipeline/background_reconstruction.py path/to/scene_dir
+```
+
+行为：
+
+- 递归读取输入目录下每个场景文件夹中的 `clean_background.png` 和配套的 `input_image.png`。
+- 运行 AnySplat 恢复相机内外参、深度、3DGS 重建结果。
+- 对 `bg_mask.png` 做 RANSAC 平面拟合，结合内部 PCA 得到 OBB，构建 world → table 变换。
+- 输出 Mujoco 坐标系下的对齐点云。
+
+常用参数：
+
+- `--model-id lhjiang/anysplat` — 覆盖 AnySplat 的 HuggingFace 模型 id
+- `--align-table` / `--no-align-table` — 是否启用 RANSAC 桌面对齐并导出 `bg_aligned.ply`（默认启用）。关闭时只导出原始 `bg.ply`
+- `--x-offset`、`--z-offset` — 对齐后可选的放置偏移（米）。默认 0，对齐后的点云落在原点
+
+输出（位于 `scene_dir/`）：
+
+- `extrinsic.npy`、`intrinsic.npy` — 相机参数（world-to-camera；像素单位内参）
+- `depth.npy`、`depth_visual.png` — 来自 splat 重建的深度
+- `depth_ori.npy`、`depth_ori_visual.png` — 来自原始（未补全）图像的深度
+- `scale.npy` — 场景级缩放因子
+- `3d_assets/bg.ply` — AnySplat 输出的原始 3DGS 场景
+- `3d_assets/bg_aligned.ply` — 桌面对齐后的 3DGS 场景（仅当 `--align-table` 启用时输出，默认启用）
+
+## **Stage 3 — SAM-3D-Objects 单物体重建**
+
+```bash
+python pipeline/objects_generation.py --input-dir path/to/scene_dir
+```
+
+常用参数：
+
+- `--project-root submodule/Sam-3d-objects` — checkpoint 根目录
+- `--tag hf` — checkpoint 子目录（`submodule/Sam-3d-objects/checkpoints/<tag>/pipeline.yaml`）
+- `--seed 42`、`--save-pt`、`--save-intermediate`
+
+针对每一个 mask，该 stage 运行 SAM-3D-Objects 推理，通过对比投影面积与平均深度恢复物体局部尺寸，并把资产以原点姿态导出。
+
+输出（位于 `scene_dir/3d_assets/`）：
+
+- `<物体名>.obj` — Mujoco 单位的物体 mesh
+- `<物体名>.ply` — Mujoco 单位的物体 3D Gaussian
+- `<物体名>_keyframe.npy` — 最终 mesh 的平均 XYZ
+- 当传入 `--save-intermediate` 时，额外导出调试用的渲染和带姿态的中间产物
+
+------
+
+# **5. 可选工具**
+
+## **`pipeline/mesh2mjcf.py` — mesh → MuJoCo MJCF 转换器**
+
+一个独立的命令行工具，把单个 `.obj` 或 `.stl` 文件转成 MuJoCo MJCF 资产
+（`<asset>_dependencies.xml` + `<asset>.xml` 两个 XML，以及一个 per-asset 的
+mesh / texture 目录）。它**没有**被串进
+`run_object_generation_pipeline.sh`；当 Stage 3 产出
+`<scene>/3d_assets/<obj>.obj` 之后按需调用即可。
+
+默认输出根目录是输入 mesh 的父目录，所以对
+`scene_dir/3d_assets/cup.obj` 运行后会在输入旁边生成一个 per-asset 目录：
 
 ```
-CONDA_SH="/your_path/miniconda3/etc/profile.d/conda.sh"
+scene_dir/3d_assets/
+  cup.obj                      （原输入，不变）
+  cup/                         （以 obj 名命名的 per-asset 输出目录）
+    cup.obj                    （输入的拷贝）
+    cup.mtl                    （若多材质）
+    <纹理文件>                  （MTL 引用的贴图）
+    part_0.obj part_1.obj ...  （若 -cd）
+    mjcf/
+      cup.xml
+      cup_dependencies.xml
+```
+
+emitted XML 中的 mesh 路径写作 `<asset>/<file>`，所以消费方的 MuJoCo
+scene 需要把 `meshdir`（和 `texturedir`）设为输出根目录。通过
+`-o/--output <dir>` 可以重定向。
+
+### 所需依赖
+
+工具本身只用到 Python 标准库；以下功能按需选装：
+
+| 功能 | 依赖库 | 安装命令 |
+| --- | --- | --- |
+| 多材质 OBJ 自动拆分（当存在 MTL 文件时触发） | `trimesh` | 通常 Sam-3d-objects extras 已附带；如缺则 `uv pip install trimesh` |
+| 凸分解（`-cd`） | `coacd`、`trimesh` | `uv pip install coacd trimesh` |
+| 预览查看器（`--verbose`） | `mujoco` | `uv pip install mujoco` |
+
+### 用法
+
+```bash
+# 基本用法（使用默认颜色 / 质量 / 惯性）
+python pipeline/mesh2mjcf.py path/to/cup.obj
+
+# 自定义 RGBA、质量、对角惯性
+python pipeline/mesh2mjcf.py path/to/cup.obj \
+    --rgba 0.8 0.2 0.2 1.0 --mass 0.5 --diaginertia 0.01 0.01 0.005
+
+# 自由关节 + 凸分解，得到更精确的碰撞几何
+python pipeline/mesh2mjcf.py path/to/cup.obj --free_joint -cd
+
+# 在 mujoco.viewer 中预览
+python pipeline/mesh2mjcf.py path/to/cup.obj --verbose
+
+# 一键批量转换某个场景下所有物体
+for obj in scene_dir/3d_assets/*.obj; do
+    python pipeline/mesh2mjcf.py "$obj" -cd
+done
 ```
 
 ------
 
-## **阶段 1：Qwen3-VL + SAM3 生成 2D Mask**
+# **6. 坐标系说明**
 
-执行：
-
-```
-bash run_agent_with_vllm.sh
-```
-
-此脚本会：
-
-1. 激活 `vllm` 环境
-2. 启动 vLLM 服务，加载 Qwen3-VL
-3. 激活 `sam3` 环境
-4. 运行 `pipeline/run_sam3_agent_full.py`
-5. 生成多物体 mask
-
-输出目录：
-
-```
-outputs/master_with_vllm/masks/
-```
+- **AnySplat** 输出的外参是 camera-to-world；流水线会取其逆并存为 world-to-camera（`extrinsic.npy`）。
+- **SAM-3D-Objects** 直接产出的 `.ply` 处于相机对齐坐标系（+Z 前、+X 右、+Y 下）。Stage 3 通过 `pipeline/objects_generation.py` 中的常量 `_SAM3D_TO_WORLD` 把它们旋转到世界坐标系。
+- 最终的 `bg_aligned.ply` 已经以桌面为中心，按 |xyz| 95% 分位数映射到 0.6 的半径，并可选地叠加 `--x-offset` / `--z-offset` 偏移（默认 0，所以默认落在原点）。
 
 ------
 
-## **阶段 2：SAM-3D-Objects 重建 3D Gaussian**
+# **7. 常见问题**
 
-执行：
+**Q：HuggingFace 下载报 "Consistency check failed: file should be XXXX but has size YYYY"。**
 
+HuggingFace 缓存中的 shard 损坏。清理后重试：
+
+```bash
+rm -rf submodule/Sam-3d-objects/checkpoints/hf
+rm -rf ~/.cache/huggingface/hub   # 可选，更激进
+bash run_object_generation_pipeline.sh path/to/input_image.png
 ```
-bash run_sam3d_from_masks.sh
-```
 
-此脚本会：
+也可以在调用 HuggingFace API 时通过 `force_download=True` 强制重新下载。
 
-1. 激活 `sam3d-objects` 环境
-2. 确保 SAM-3D-Objects 的 checkpoint 下载完成
-3. 加载 RGB + masks
-4. 生成每个物体的 `.pt` 文件
-5. 重建并导出 3D Gaussian (`.ply`, `.gif`)
+**Q：AnySplat 提示 "cannot find cuda-compiled version of RoPE2D, using a slow pytorch version instead"。**
 
-输出目录：
-
-```
-sam-3d-objects/outputs/torch_save_pt/
-sam-3d-objects/gaussians/multi/
-```
+CUDA 扩展没编译。请按 [`install.md`](install.md) 里的说明修改 `kernels.cu`，再执行 `python setup.py build_ext --inplace`。
 
 ------
 
-## **可选：一键式全流程执行**
+# **引用**
 
-```
-bash run_pipeline.sh
-```
-
-该脚本会自动完成阶段 1 + 阶段 2。
-
-------
-
-# **Q&A**
-
-## **Q1：下载模型时报 “Consistency check failed”？**
-
-**原因：** 下载中断导致 HuggingFace 缓存中出现损坏的模型分片。
- **解决：删除损坏缓存并重新下载。**
-
-```
-rm -rf sam-3d-objects/checkpoints/hf
-rm -rf ~/.cache/huggingface/hub   # 可选
-bash run_sam3d_from_masks.sh
-```
-
-若要强制重新下载，可使用：
-
-```
-force_download=True
-```
-
-## **关于坐标系说明（PLY 输出方向）**
-
-通过 **SAM-3D-Objects** 导出的 3D Gaussian `.ply` 文件默认处于 **相机坐标系** 下，其中：
-
-- **+Z 轴** 为相机前向
-- **+X 轴** 指向右侧
-- **+Y 轴** 指向下方（典型计算机视觉坐标系）
-
-因此，重建的对象是以 **相机前向 Z 轴** 对齐的，而不是世界坐标系。
-
-如果需要将 `.ply` 放置到全局 **世界坐标系** 中（例如仿真器、机器人场景、NeRF / COLMAP world frame），必须执行一次 **相机 → 世界坐标系转换**：
-$$
-\mathbf{X}_{world} = \mathbf{R}_{c2w}\ \mathbf{X}_{camera} \ + \ \mathbf{t}_{c2w}
-$$
-其中：
-
-- $\mathbf{R}_{c2w}$：相机到世界的旋转矩阵
-- $\mathbf{t}_{c2w}$：相机到世界的平移向量
-- $\mathbf{X}_{camera}$：高斯中心的相机系坐标
-- $\mathbf{X}_{world}$：转换后的世界系坐标
-
-完成转换后，你即可将 `.ply` 与全局场景或机器人环境正确对齐。
-------
-
-# **引用（Citation）**
-
-### **SAM3**
-
-```
+```bibtex
 @article{kirillov2024sam3,
-  title={SAM 3: Segment Anything in Images and Videos},
-  author={Kirillov, Alexander and Ravi, Nikhila and Mao, Weiyao and others},
-  year={2024},
-  url={https://github.com/facebookresearch/sam3}
+  title  = {SAM 3: Segment Anything in Images and Videos},
+  author = {Kirillov, Alexander and Ravi, Nikhila and Mao, Weiyao and others},
+  year   = {2024},
+  url    = {https://github.com/facebookresearch/sam3}
 }
-```
 
-### **SAM-3D-Objects**
-
-```
 @article{wu2024sam3dobjects,
-  title={SAM-3D-Objects: Segment Anything in 3D Using 2D Masks},
-  author={Wu, Yu and Mao, Weiyao and Kirillov, Alexander and others},
-  year={2024},
-  url={https://github.com/facebookresearch/sam3d}
+  title  = {SAM-3D-Objects: Segment Anything in 3D Using 2D Masks},
+  author = {Wu, Yu and Mao, Weiyao and Kirillov, Alexander and others},
+  year   = {2024},
+  url    = {https://github.com/facebookresearch/sam3d}
+}
+
+@article{jiang2024anysplat,
+  title  = {AnySplat: Feed-forward 3D Gaussian Splatting from Unconstrained Views},
+  author = {Jiang, Lihan and others},
+  year   = {2024},
+  url    = {https://github.com/OpenRobotLab/AnySplat}
 }
 ```
 
 ------
 
-# **致谢（Acknowledgements）**
+# **致谢**
 
-本项目基于以下官方实现构建：
+本项目基于并整合了以下工作：
 
-- **SAM3**
-   GitHub: https://github.com/facebookresearch/sam3
-   HuggingFace: https://huggingface.co/facebook/sam3
-- **SAM-3D-Objects**
-   GitHub: https://github.com/facebookresearch/sam3d
-   HuggingFace: https://huggingface.co/facebook/sam-3d-objects
+- **SAM3** — [GitHub](https://github.com/facebookresearch/sam3) · [HuggingFace](https://huggingface.co/facebook/sam3)
+- **SAM-3D-Objects** — [GitHub](https://github.com/facebookresearch/sam3d) · [HuggingFace](https://huggingface.co/facebook/sam-3d-objects)
+- **AnySplat** — [HuggingFace](https://huggingface.co/lhjiang/anysplat)
+- **Prompt-Inpaint** — [GitHub](https://github.com/MrZoyo/Prompt-Inpaint)
 
-感谢原作者开放其卓越的研究成果与代码，使本流水线得以实现。
+感谢原作者开放其研究成果与代码。

@@ -1,13 +1,9 @@
 [submodule "Sam-3d-objects"]
-	path = Sam-3d-objects
-	# url = https://github.com/facebookresearch/sam-3d-objects.git
+	path = submodule/Sam-3d-objects
 	url = https://github.com/Yuchi-Zhang-00/sam-3d-objects.git
-[submodule "Sam3"]
-	path = Sam3
-	url = https://github.com/facebookresearch/sam3.git
 [submodule "AnySplat"]
-	path = AnySplat
+	path = submodule/AnySplat
 	url = https://github.com/Yuchi-Zhang-00/AnySplat.git
 [submodule "Prompt-Inpaint"]
-	path = Prompt-Inpaint
+	path = submodule/Prompt-Inpaint
 	url = https://github.com/MrZoyo/Prompt-Inpaint.git
