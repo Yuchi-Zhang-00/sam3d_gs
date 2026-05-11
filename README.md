@@ -113,7 +113,7 @@ bootstrap step is needed for it.
 
 # **3. Quick Start**
 
-With the environment activated, try the bundled demo image:
+Try the bundled demo image (the entry script activates `.venv` internally, so you don't need to do it yourself):
 
 ```bash
 bash run_object_generation_pipeline.sh example/example.png
@@ -270,15 +270,7 @@ done
 
 ------
 
-# **6. Coordinate System Notes**
-
-- **AnySplat** returns camera-to-world extrinsics; the pipeline inverts them and stores world-to-camera (`extrinsic.npy`).
-- The raw 3D Gaussian `.ply` files produced by SAM-3D-Objects are expressed in a camera-aligned frame (+Z forward, +X right, +Y down). Stage 3 applies the rotation `_SAM3D_TO_WORLD` (see `pipeline/objects_generation.py`) to map them into the world frame.
-- The final `bg_aligned.ply` is centred on the table, scaled so the 95% quantile of |xyz| maps to 0.6, and optionally shifted by `--x-offset` / `--z-offset` (default 0, so it lands at the origin).
-
-------
-
-# **7. FAQ**
+# **6. FAQ**
 
 **Q: HuggingFace download fails with “Consistency check failed: file should be XXXX but has size YYYY”.**
 

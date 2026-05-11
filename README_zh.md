@@ -112,7 +112,7 @@ bash scripts/download_checkpoints.sh
 
 # **3. 快速开始**
 
-激活环境后，可以先用仓库自带的示例图跑一遍：
+先用仓库自带的示例图跑一遍即可（入口脚本会自动 `source .venv`，无需手动激活环境）：
 
 ```bash
 bash run_object_generation_pipeline.sh example/example.png
@@ -267,15 +267,7 @@ done
 
 ------
 
-# **6. 坐标系说明**
-
-- **AnySplat** 输出的外参是 camera-to-world；流水线会取其逆并存为 world-to-camera（`extrinsic.npy`）。
-- **SAM-3D-Objects** 直接产出的 `.ply` 处于相机对齐坐标系（+Z 前、+X 右、+Y 下）。Stage 3 通过 `pipeline/objects_generation.py` 中的常量 `_SAM3D_TO_WORLD` 把它们旋转到世界坐标系。
-- 最终的 `bg_aligned.ply` 已经以桌面为中心，按 |xyz| 95% 分位数映射到 0.6 的半径，并可选地叠加 `--x-offset` / `--z-offset` 偏移（默认 0，所以默认落在原点）。
-
-------
-
-# **7. 常见问题**
+# **6. 常见问题**
 
 **Q：HuggingFace 下载报 "Consistency check failed: file should be XXXX but has size YYYY"。**
 
