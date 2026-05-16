@@ -105,13 +105,151 @@ The script is idempotent and is also invoked automatically by
 `run_object_generation_pipeline.sh` on first run. Use `--skip-sam3d`,
 `--skip-sam3`, or `--force` to control individual stages.
 
-`lhjiang/anysplat` is public and is downloaded lazily by
-`AnySplat.from_pretrained` the first time Stage 2 runs — no login or
-bootstrap step is needed for it.
+`lhjiang/anysplat` is also fetched by the same bootstrap script (into the
+standard HuggingFace hub cache at `~/.cache/huggingface/hub/`). It is public
+(MIT), so no `hf auth login` is required for this one — pre-fetching just
+keeps the first Stage-2 run from doing a multi-GB download. Pass
+`--skip-anysplat` if you'd rather have AnySplat pull it lazily on first run.
+
+------
+
+## **2.4 Docker image (alternative to 2.1–2.3)**
+
+A pre-built image with the full environment (CUDA 12.8 base, the
+uv-managed `.venv`, the compiled AnySplat curope CUDA extension, and all
+PyPI deps) is published to Aliyun Container Registry:
+
+```
+crpi-3nfi31esiwp28zns.cn-hangzhou.personal.cr.aliyuncs.com/open_projects_yuchi/sam3d_gs:v0.1
+crpi-3nfi31esiwp28zns.cn-hangzhou.personal.cr.aliyuncs.com/open_projects_yuchi/sam3d_gs:latest
+```
+
+Using the image skips §2.2 entirely; you still need a clone of this repo on
+the host (the launcher and the host-side checkpoint directories) and HF
+access for the two gated models (§2.3).
+
+### **Prerequisites**
+
+- Docker with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+  installed; an NVIDIA GPU with ≥ 24 GB VRAM
+- A local clone of this repo (`git clone --recursive ...`, see §2.1) — used
+  both for the `run_docker.sh` launcher and as the bind-mount root for
+  checkpoints, data, and outputs
+- One-time HuggingFace setup (§2.3) and a host-side run of
+  `bash scripts/download_checkpoints.sh`. Checkpoints live on the host and
+  are bind-mounted into the container, so this only runs once.
+
+### **Pull the image**
+
+```bash
+docker pull crpi-3nfi31esiwp28zns.cn-hangzhou.personal.cr.aliyuncs.com/open_projects_yuchi/sam3d_gs:v0.1
+docker tag  crpi-3nfi31esiwp28zns.cn-hangzhou.personal.cr.aliyuncs.com/open_projects_yuchi/sam3d_gs:v0.1 sam3d-gs:latest
+```
+
+The re-tag is optional. `run_docker.sh` defaults to `sam3d-gs:latest`; if
+you'd rather not re-tag, prefix the launch with
+`SAM3D_IMAGE=crpi-.../sam3d_gs:v0.1` instead.
+
+### **Launch the container**
+
+```bash
+./run_docker.sh                                       # uses defaults
+./run_docker.sh /path/to/sam3d_gs                     # explicit project dir
+./run_docker.sh /path/to/sam3d_gs /mnt/hf_cache       # custom HF cache root
+SAM3D_IMAGE=sam3d-gs:v0.1 ./run_docker.sh             # pick a specific tag
+TORCH_HOME=/mnt/torch_cache ./run_docker.sh           # custom torch hub cache
+```
+
+The launcher bind-mounts the relevant host paths into the container:
+
+| Host path | Container path | Purpose |
+| --- | --- | --- |
+| `<repo>/submodule/Sam-3d-objects/checkpoints` | same | SAM-3D-Objects weights (gated) |
+| `<repo>/submodule/Prompt-Inpaint/checkpoints` | same | SAM3 weight (gated) |
+| `${HF_HOME:-$HOME/.cache/huggingface}` | `/root/.cache/huggingface` | AnySplat + other HF downloads |
+| `${TORCH_HOME:-$HOME/.cache/torch}` | `/root/.cache/torch` | `torch.hub` cache (DINOv2 etc.) |
+| `<repo>/data` | `/opt/sam3d_gs/data` | scratch input/output dir |
+| `<repo>/example` | `/opt/sam3d_gs/example` | bundled demo input/output |
+
+Pipeline outputs land in whichever scene directory you point the launcher
+at — since `data/` and `example/` are bind-mounted, those outputs persist
+on the host after the container exits.
+
+### **Run the pipeline inside the container**
+
+You land in `/opt/sam3d_gs/`. The image's `PATH` and `PYTHONPATH` already
+point at the bundled `.venv`, so you can call `python` and run scripts
+directly — **no `source .venv/bin/activate`**.
+
+```bash
+# Bundled demo:
+bash run_object_generation_pipeline.sh example/example.png
+
+# Your own image:
+bash run_object_generation_pipeline.sh data/my_scene/input_image.png
+```
+
+Stage 1/2/3 each behave exactly as in §3–§4 below.
+
+### **What's baked into the image**
+
+- CUDA 12.8 devel base + Python 3.11 `.venv` with every PyPI dep
+- Compiled AnySplat `curope` CUDA extension (sm_80 / 90 / 100 / 120)
+- `coacd`, `trimesh`, `mujoco` (so `pipeline/mesh2mjcf.py` works out of the box)
+- `sitecustomize.py` patching `torch.hub` to use the local cache without
+  pinging github first (avoids `RemoteDisconnected` on flaky networks once
+  the model is in `~/.cache/torch/hub`)
+- A global `git insteadOf` rule routing `https://github.com/` through
+  `https://gh-proxy.com/https://github.com/`, so in-container `git clone`
+  works on networks where direct github access is unreliable
+
+### **What's NOT baked in**
+
+- The three model checkpoint sets (SAM3, SAM-3D-Objects, AnySplat). They
+  live on the host and are bind-mounted via the table above. Run
+  `scripts/download_checkpoints.sh` once on the host.
+- Your input data. Drop it into `<repo>/data/<scene_name>/` and reference
+  it as `data/<scene_name>/input_image.png` inside the container.
+
+### **Caveats**
+
+- **Output files end up owned by `root` on the host.** The container runs
+  as root, so anything the pipeline writes into a bind-mounted directory
+  (`data/`, `example/`, the checkpoint dirs, etc.) shows up on the host
+  with uid 0. Two ways to deal with it:
+
+  ```bash
+  # After the container exits, fix ownership on the host:
+  sudo chown -R $(id -u):$(id -g) data/ example/
+
+  # Or run the container as your host user from the start.
+  # This avoids the chown step but can break EGL / pyrender setup
+  # in some Sam-3d-objects code paths, so prefer the chown fix.
+  # (To try anyway: edit run_docker.sh and add `--user $(id -u):$(id -g)`
+  # to the `docker run` invocation.)
+  ```
+
+- **The `gh-proxy.com` redirect is for users behind the GFW.** The image
+  bakes a `git config --global url.<proxy>.insteadOf https://github.com/`
+  rule so in-container `git clone` of github URLs survives flaky direct
+  access from mainland China. **Outside mainland China this hop is
+  unnecessary and may slow things down.** Disable it once per container
+  start:
+
+  ```bash
+  git config --global --unset url."https://gh-proxy.com/https://github.com/".insteadOf
+  ```
+
+  (Or bake your own image variant with the rule removed if you'd rather
+  not run that every time.)
 
 ------
 
 # **3. Quick Start**
+
+> If you're using the Docker image (§2.4), start the container first with
+> `./run_docker.sh` — every command in this section runs **inside** the
+> container exactly as written.
 
 Try the bundled demo image (the entry script activates `.venv` internally, so you don't need to do it yourself):
 
@@ -237,12 +375,14 @@ root. Pass `-o/--output <dir>` to redirect.
 
 ### Required libraries
 
-The converter has no extra dependencies beyond the Python standard library
-unless you opt into the following features:
+Fresh installs via `scripts/install_env.sh` already include all three optional
+packages (`coacd`, `trimesh`, `mujoco`), so the table below is only for
+reference if you skip the bundled installer or build the environment
+piecemeal:
 
-| Feature | Library | Install |
+| Feature | Library | Manual install |
 | --- | --- | --- |
-| Multi-material OBJ splitting (automatic when an MTL file is present) | `trimesh` | usually already installed via the Sam-3d-objects extras; `uv pip install trimesh` otherwise |
+| Multi-material OBJ splitting (automatic when an MTL file is present) | `trimesh` | `uv pip install trimesh` |
 | Convex decomposition (`-cd`) | `coacd`, `trimesh` | `uv pip install coacd trimesh` |
 | Preview viewer (`--verbose`) | `mujoco` | `uv pip install mujoco` |
 

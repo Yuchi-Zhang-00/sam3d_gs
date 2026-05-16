@@ -149,6 +149,14 @@ echo "==> Installing SAM3..."
 uv pip install --index-strategy unsafe-best-match \
     "git+https://github.com/facebookresearch/sam3.git"
 
+# Optional mesh2mjcf extras (installed by default so `-cd` / `--verbose` Just
+# Work; `trimesh` is also used for multi-material OBJ splitting).
+echo "==> Installing mesh2mjcf extras (coacd, trimesh, mujoco)..."
+uv pip install --index-strategy unsafe-best-match \
+    "coacd" \
+    "trimesh" \
+    "mujoco"
+
 if [[ "${COMPILE_CUROPE}" -eq 1 ]]; then
     CUROPE_DIR="${PROJECT_ROOT}/submodule/AnySplat/src/model/encoder/backbone/croco/curope"
     KERNELS_CU="${CUROPE_DIR}/kernels.cu"
@@ -193,9 +201,4 @@ Next steps:
 
 If you use gated HuggingFace models, run:
   huggingface-cli login
-
-Optional extras for pipeline/mesh2mjcf.py:
-  - Convex decomposition (-cd):    uv pip install coacd trimesh
-  - Preview viewer (--verbose):    uv pip install mujoco
-  (trimesh is usually already installed via the Sam-3d-objects extras above.)
 EOF

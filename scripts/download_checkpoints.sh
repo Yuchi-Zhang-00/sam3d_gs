@@ -14,8 +14,10 @@
 #      `submodule/Prompt-Inpaint/checkpoints/` keeps the weights co-located
 #      with the project and survives `~/.cache` cleanups.
 #
-# (lhjiang/anysplat is intentionally NOT handled here; it is pulled lazily by
-# AnySplat.from_pretrained on first run.)
+#   3. lhjiang/anysplat
+#      AnySplat.from_pretrained reads from the HuggingFace hub cache
+#      (~/.cache/huggingface/hub/). Pre-fetching avoids a multi-GB download
+#      on the first pipeline run inside an ephemeral container.
 #
 # The script is idempotent: existing target files are skipped unless --force.
 #
@@ -27,6 +29,7 @@
 #                   for the SAM-3D-Objects bundle. Default: hf
 #   --skip-sam3d    Do not download the SAM-3D-Objects bundle.
 #   --skip-sam3     Do not download the SAM3 weight (sam3.pt).
+#   --skip-anysplat Do not pre-fetch the AnySplat weights into the HF cache.
 #   --force         Re-download even if the target files already exist.
 #   -h, --help      Show this help.
 #
@@ -35,6 +38,7 @@
 #   SAM3D_MODEL_ID          SAM-3D-Objects repo id (default: facebook/sam-3d-objects)
 #   SAM3_MODEL_ID           SAM3 repo id           (default: facebook/sam3)
 #   SAM3_WEIGHT_FILENAME    SAM3 weight file name  (default: sam3.pt)
+#   ANYSPLAT_MODEL_ID       AnySplat repo id       (default: lhjiang/anysplat)
 
 set -euo pipefail
 
@@ -45,12 +49,14 @@ TAG="${SAM3D_CHECKPOINT_TAG:-hf}"
 SAM3D_MODEL_ID="${SAM3D_MODEL_ID:-facebook/sam-3d-objects}"
 SAM3_MODEL_ID="${SAM3_MODEL_ID:-facebook/sam3}"
 SAM3_WEIGHT_FILENAME="${SAM3_WEIGHT_FILENAME:-sam3.pt}"
+ANYSPLAT_MODEL_ID="${ANYSPLAT_MODEL_ID:-lhjiang/anysplat}"
 SKIP_SAM3D=0
 SKIP_SAM3=0
+SKIP_ANYSPLAT=0
 FORCE=0
 
 usage() {
-    sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# //; s/^#$//'
+    sed -n '2,42p' "${BASH_SOURCE[0]}" | sed 's/^# //; s/^#$//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -65,6 +71,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-sam3)
             SKIP_SAM3=1
+            shift
+            ;;
+        --skip-anysplat)
+            SKIP_ANYSPLAT=1
             shift
             ;;
         --force)
@@ -171,6 +181,30 @@ download_sam3() {
 }
 
 
+download_anysplat() {
+    # AnySplat.from_pretrained looks up the model in the HuggingFace hub
+    # cache, so we leave files under the standard cache layout (no
+    # --local-dir). The cache root is HF_HOME if set, otherwise
+    # ~/.cache/huggingface.
+    local hf_root="${HF_HOME:-${HOME}/.cache/huggingface}"
+    # HF cache layout: hub/models--<org>--<name>/snapshots/<rev>/...
+    local hub_dirname="models--$(echo "${ANYSPLAT_MODEL_ID}" | sed 's|/|--|g')"
+    local snapshots_dir="${hf_root}/hub/${hub_dirname}/snapshots"
+
+    if [[ -d "${snapshots_dir}" ]] && \
+       [[ -n "$(ls -A "${snapshots_dir}" 2>/dev/null)" ]] && \
+       [[ "${FORCE}" -eq 0 ]]; then
+        echo "==> [anysplat] already present in HF cache: ${snapshots_dir}"
+        return 0
+    fi
+
+    require_hf_cli
+    echo "==> [anysplat] downloading ${ANYSPLAT_MODEL_ID} into HF cache (${hf_root})"
+    hf download "${ANYSPLAT_MODEL_ID}"
+    echo "==> [anysplat] done."
+}
+
+
 if [[ "${SKIP_SAM3D}" -eq 0 ]]; then
     download_sam3d_objects
 else
@@ -181,6 +215,12 @@ if [[ "${SKIP_SAM3}" -eq 0 ]]; then
     download_sam3
 else
     echo "==> [sam3] skipped (--skip-sam3)"
+fi
+
+if [[ "${SKIP_ANYSPLAT}" -eq 0 ]]; then
+    download_anysplat
+else
+    echo "==> [anysplat] skipped (--skip-anysplat)"
 fi
 
 echo "==> All requested checkpoints are in place."

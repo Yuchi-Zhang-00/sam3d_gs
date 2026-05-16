@@ -105,12 +105,145 @@ bash scripts/download_checkpoints.sh
 自动调用它。可以通过 `--skip-sam3d`、`--skip-sam3` 或 `--force` 单独控制每
 一个 stage。
 
-`lhjiang/anysplat` 是公开模型，在 Stage 2 首次运行时由
-`AnySplat.from_pretrained` 按需下载，**不需要登录或 bootstrap**。
+`lhjiang/anysplat` 也由同一个 bootstrap 脚本拉取（落到标准的 HuggingFace
+hub 缓存 `~/.cache/huggingface/hub/` 下）。它是公开模型（MIT），**不需要
+`hf auth login`**；提前拉只是避免 Stage 2 首次运行时做几 GB 的下载。
+传 `--skip-anysplat` 可以跳过这一步、让 AnySplat 首次运行时再 lazy 下载。
+
+------
+
+## **2.4 Docker 镜像（2.1–2.3 的替代方案）**
+
+仓库提供了一份预构建镜像，包含完整环境（CUDA 12.8 基础镜像、uv 管理的
+`.venv`、编译好的 AnySplat curope CUDA 扩展、所有 PyPI 依赖），已发布到
+阿里云容器镜像服务：
+
+```
+crpi-3nfi31esiwp28zns.cn-hangzhou.personal.cr.aliyuncs.com/open_projects_yuchi/sam3d_gs:v0.1
+crpi-3nfi31esiwp28zns.cn-hangzhou.personal.cr.aliyuncs.com/open_projects_yuchi/sam3d_gs:latest
+```
+
+用镜像可以完全跳过 §2.2；但宿主机仍然需要克隆本仓库（用于
+`run_docker.sh` 启动脚本和 checkpoint 的 bind-mount 目录），以及完成
+§2.3 的 HuggingFace 权限申请。
+
+### **前置条件**
+
+- 已安装 Docker 和 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)；
+  显存 ≥ 24 GB 的 NVIDIA GPU
+- 宿主机上已经 clone 了本仓库（`git clone --recursive ...`，见 §2.1）——
+  用作 `run_docker.sh` 启动脚本所在位置,以及 checkpoint / 数据 / 输出的
+  bind-mount 根目录
+- 完成 §2.3 的一次性 HuggingFace 设置，并在宿主机执行过
+  `bash scripts/download_checkpoints.sh`。Checkpoint 留在宿主机、通过
+  bind-mount 进容器，所以只需要下载一次。
+
+### **拉取镜像**
+
+```bash
+docker pull crpi-3nfi31esiwp28zns.cn-hangzhou.personal.cr.aliyuncs.com/open_projects_yuchi/sam3d_gs:v0.1
+docker tag  crpi-3nfi31esiwp28zns.cn-hangzhou.personal.cr.aliyuncs.com/open_projects_yuchi/sam3d_gs:v0.1 sam3d-gs:latest
+```
+
+`docker tag` 这一步可选。`run_docker.sh` 默认使用 `sam3d-gs:latest`；
+如果不想重 tag，可以在启动时加前缀
+`SAM3D_IMAGE=crpi-.../sam3d_gs:v0.1`。
+
+### **启动容器**
+
+```bash
+./run_docker.sh                                       # 全默认（推荐）
+./run_docker.sh /path/to/sam3d_gs                     # 显式传项目目录
+./run_docker.sh /path/to/sam3d_gs /mnt/hf_cache       # 自定义 HF 缓存根
+SAM3D_IMAGE=sam3d-gs:v0.1 ./run_docker.sh             # 指定镜像 tag
+TORCH_HOME=/mnt/torch_cache ./run_docker.sh           # 自定义 torch hub 缓存
+```
+
+启动脚本会把宿主机的关键路径 bind-mount 进容器：
+
+| 宿主机路径 | 容器路径 | 用途 |
+| --- | --- | --- |
+| `<repo>/submodule/Sam-3d-objects/checkpoints` | 同名 | SAM-3D-Objects 权重（gated） |
+| `<repo>/submodule/Prompt-Inpaint/checkpoints` | 同名 | SAM3 权重（gated） |
+| `${HF_HOME:-$HOME/.cache/huggingface}` | `/root/.cache/huggingface` | AnySplat + 其它 HF 下载 |
+| `${TORCH_HOME:-$HOME/.cache/torch}` | `/root/.cache/torch` | `torch.hub` 缓存（DINOv2 等） |
+| `<repo>/data` | `/opt/sam3d_gs/data` | 输入 / 输出工作目录 |
+| `<repo>/example` | `/opt/sam3d_gs/example` | 自带示例输入 / 输出 |
+
+流水线的产物会写到你指定的 scene 目录里。因为 `data/` 和 `example/`
+都是 bind-mount，容器退出后这些产物会留在宿主机上。
+
+### **在容器内运行流水线**
+
+进入容器后你会落到 `/opt/sam3d_gs/`。镜像里 `PATH` 和 `PYTHONPATH`
+已经指向自带的 `.venv`，可以直接调用 `python` 和脚本，**不需要
+`source .venv/bin/activate`**。
+
+```bash
+# 自带示例：
+bash run_object_generation_pipeline.sh example/example.png
+
+# 自己的图：
+bash run_object_generation_pipeline.sh data/my_scene/input_image.png
+```
+
+Stage 1 / 2 / 3 的行为和下面 §3–§4 完全一致。
+
+### **镜像里包含什么**
+
+- CUDA 12.8 devel 基础镜像 + Python 3.11 `.venv`,所有 PyPI 依赖
+- 已编译好的 AnySplat `curope` CUDA 扩展（sm_80 / 90 / 100 / 120）
+- `coacd`、`trimesh`、`mujoco`(`pipeline/mesh2mjcf.py` 开箱可用)
+- 一个 `sitecustomize.py`，monkey-patch `torch.hub`，使其在本地缓存
+  存在时跳过 github 的 branch ping —— 这样网络不稳时也不会再触发
+  `RemoteDisconnected`(前提是 `~/.cache/torch/hub` 已有相应模型)
+- 全局的 `git insteadOf` 规则，把 `https://github.com/` 重写到
+  `https://gh-proxy.com/https://github.com/`，让容器内的
+  `git clone` 在 github 不稳的网络上也能工作
+
+### **镜像里不包含什么**
+
+- 三套模型 checkpoint（SAM3 / SAM-3D-Objects / AnySplat）。它们留在
+  宿主机上、通过上面的 bind-mount 进容器。在宿主机执行一次
+  `scripts/download_checkpoints.sh` 即可。
+- 你自己的输入数据。放到 `<repo>/data/<scene_name>/` 下，容器里通过
+  `data/<scene_name>/input_image.png` 引用。
+
+### **使用须知**
+
+- **流水线写出的文件在宿主机上属主是 `root`**。容器内是 root 用户跑的，
+  所以写进 bind-mount 目录(`data/`、`example/`、checkpoint 目录等)
+  的文件，在宿主机上看到的所有者是 uid 0。两种处理方式：
+
+  ```bash
+  # 容器退出后，在宿主机改回当前用户：
+  sudo chown -R $(id -u):$(id -g) data/ example/
+
+  # 或者从一开始就让容器用宿主机的 uid 跑。
+  # 优点是不用 chown,缺点是 Sam-3d-objects 里某些 EGL / pyrender
+  # 代码路径在非 root 下可能跑不通,所以一般建议用上面的 chown 方案。
+  # (想试的话: 编辑 run_docker.sh,给 docker run 加上
+  # `--user $(id -u):$(id -g)`)
+  ```
+
+- **`gh-proxy.com` 这个重写是给国内用户准备的**。镜像里烤了一条
+  `git config --global url.<proxy>.insteadOf https://github.com/` 规则,
+  让容器里 `git clone` github 仓库在 GFW 网络下也能成功。**在境外网络
+  环境下这个跳转是多余的,可能反而拖慢速度**。每次进容器后执行一次即可
+  禁用:
+
+  ```bash
+  git config --global --unset url."https://gh-proxy.com/https://github.com/".insteadOf
+  ```
+
+  (或者自己 commit 一个去掉这条规则的镜像变体,免得每次都跑。)
 
 ------
 
 # **3. 快速开始**
+
+> 如果你用的是 Docker 镜像（§2.4），先跑 `./run_docker.sh` 进容器；
+> 本节后面所有命令都在**容器内**原样执行。
 
 先用仓库自带的示例图跑一遍即可（入口脚本会自动 `source .venv`，无需手动激活环境）：
 
@@ -235,11 +368,12 @@ scene 需要把 `meshdir`（和 `texturedir`）设为输出根目录。通过
 
 ### 所需依赖
 
-工具本身只用到 Python 标准库；以下功能按需选装：
+走 `scripts/install_env.sh` 装环境的话，`coacd`、`trimesh`、`mujoco` 三个包
+默认就装好了。下表只在你跳过一键脚本、想手动按需装时作为参考：
 
-| 功能 | 依赖库 | 安装命令 |
+| 功能 | 依赖库 | 手动安装命令 |
 | --- | --- | --- |
-| 多材质 OBJ 自动拆分（当存在 MTL 文件时触发） | `trimesh` | 通常 Sam-3d-objects extras 已附带；如缺则 `uv pip install trimesh` |
+| 多材质 OBJ 自动拆分（当存在 MTL 文件时触发） | `trimesh` | `uv pip install trimesh` |
 | 凸分解（`-cd`） | `coacd`、`trimesh` | `uv pip install coacd trimesh` |
 | 预览查看器（`--verbose`） | `mujoco` | `uv pip install mujoco` |
 

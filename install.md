@@ -1,5 +1,10 @@
 # Install on RTX 50-series GPUs (torch 2.7.0 + cu128, also works on 3090,4090)
 
+> **Don't want to build the environment locally?** A pre-built Docker
+> image is published; see [README §2.4 "Docker image"](README.md#24-docker-image-alternative-to-2123)
+> for the pull / launch flow. This document is only the native-install
+> reference.
+
 One-command installer:
 
 ```
@@ -93,26 +98,23 @@ python setup.py build_ext --inplace
 ```
 
 
-## Optional: extra dependencies for `pipeline/mesh2mjcf.py`
+## Extra dependencies for `pipeline/mesh2mjcf.py`
 
-The mesh-to-MJCF converter (see README §5) does not require anything beyond the
-Python standard library by default, but the following features each need an
-extra package:
+`scripts/install_env.sh` already installs `coacd`, `trimesh`, and `mujoco` by
+default, so `mesh2mjcf.py` works out of the box (including `-cd` and
+`--verbose`). The commands below are only useful if you build the environment
+piecemeal and want to add the individual packages on demand:
 
 ```
-# Convex decomposition (--cd)
+# Convex decomposition (-cd)
 uv pip install coacd trimesh
 
 # Preview viewer (--verbose)
 uv pip install mujoco
 ```
 
-`trimesh` is also used for multi-material OBJ splitting, but it is usually
-already installed as part of the Sam-3d-objects extras above. Install it
-explicitly only if `python -c "import trimesh"` fails.
 
-
-# Completed changes compared to the original repository:
+# Completed modifications compared to the original repository:
 
 submodule/Sam-3d-objects/pyproject.toml:
 ```
